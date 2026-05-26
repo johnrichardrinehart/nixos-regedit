@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NixOS Regedit</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="window">
+      <header class="titlebar">
+        <span class="app-icon"></span>
+        <span>NixOS Regedit</span>
+      </header>
+      <nav class="menubar" aria-label="Menu">
+        <button>File</button>
+        <button>Edit</button>
+        <button>View</button>
+        <button>Favorites</button>
+        <button>Help</button>
+      </nav>
+      <section class="toolbar" aria-label="Toolbar">
+        <button id="evaluateButton" title="Evaluate expression">Evaluate</button>
+        <button id="expandButton" title="Expand visible keys">Expand</button>
+        <button id="collapseButton" title="Collapse keys">Collapse</button>
+        <button id="copyPathButton" title="Copy selected path">Copy Path</button>
+        <button id="copyJsonButton" title="Copy selected option JSON">Copy JSON</button>
+        <label class="toggle">
+          <input id="allowFetch" type="checkbox">
+          <span>Allow fetch</span>
+        </label>
+      </section>
+      <section class="expression-row">
+        <label for="expressionInput">Expression</label>
+        <textarea id="expressionInput" spellcheck="false" placeholder='github:owner/repo or { default = { lib, ... }: { options.example.enable = lib.mkEnableOption "example"; }; }'></textarea>
+      </section>
+      <section class="pathbar">
+        <span>Computer\NixOS</span>
+        <input id="addressInput" readonly value="Computer\NixOS">
+      </section>
+      <section id="diagnostics" class="diagnostics" hidden></section>
+      <section class="content">
+        <aside class="tree-pane" aria-label="Key tree">
+          <div id="tree" class="tree"></div>
+        </aside>
+        <div class="splitter" aria-hidden="true"></div>
+        <section class="details-pane">
+          <div class="filter-row">
+            <label for="filterInput">Find</label>
+            <input id="filterInput" type="search" autocomplete="off">
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Data</th>
+              </tr>
+            </thead>
+            <tbody id="optionRows"></tbody>
+          </table>
+          <section id="optionDetails" class="option-details"></section>
+        </section>
+      </section>
+      <footer class="statusbar">
+        <span id="statusText">Ready</span>
+        <span id="countText">0 options</span>
+      </footer>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
