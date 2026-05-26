@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+from urllib.parse import unquote
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -24,9 +25,26 @@ class EvaluationFailure(Exception):
 class EvaluationRequest:
     expression: str
     allow_fetch: bool = False
+    system: str | None = None
 
 
 FLAKE_REF_RE = re.compile(r"^[A-Za-z0-9+._:/?=@%~-]+(?:#[A-Za-z0-9+._/?=@%~-]+)?$")
+SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+CURRENT_SYSTEM_EXPR = "builtins.currentSystem"
+
+
+def current_system(*, runner: Runner | None = None, cwd: str | None = None) -> str:
+    runner = runner or subprocess.run
+    completed = runner(
+        ["nix", "eval", "--raw", "--impure", "--expr", CURRENT_SYSTEM_EXPR],
+        cwd=cwd or os.getcwd(),
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+    if completed.returncode != 0:
+        return "builtins.currentSystem"
+    return completed.stdout.strip() or "builtins.currentSystem"
 
 
 def parse_request(payload: dict[str, Any]) -> EvaluationRequest:
@@ -36,7 +54,14 @@ def parse_request(payload: dict[str, Any]) -> EvaluationRequest:
     allow_fetch = payload.get("allowFetch", False)
     if not isinstance(allow_fetch, bool):
         raise ValueError("allowFetch must be a boolean")
-    return EvaluationRequest(expression=expression.strip(), allow_fetch=allow_fetch)
+    system = payload.get("system")
+    if system is None or system == "":
+        system = None
+    elif not isinstance(system, str):
+        raise ValueError("system must be a string")
+    else:
+        system = system.strip() or None
+    return EvaluationRequest(expression=expression.strip(), allow_fetch=allow_fetch, system=system)
 
 
 def looks_like_flake_ref(value: str) -> bool:
@@ -63,23 +88,182 @@ def build_command(nix_expr: str, allow_fetch: bool) -> list[str]:
     return command
 
 
-def flake_ref_expr(ref: str) -> str:
+def build_flake_metadata_command(ref: str, allow_fetch: bool) -> list[str]:
+    command = [
+        "nix",
+        "--extra-experimental-features",
+        "nix-command flakes",
+    ]
+    if not allow_fetch:
+        command.append("--offline")
+    command.extend(["flake", "metadata", "--json", ref])
+    return command
+
+
+def normalize_flake_ref(ref: str, cwd: str) -> str:
+    if SCHEME_RE.match(ref):
+        return ref
+    candidate = ref if os.path.isabs(ref) else os.path.join(cwd, ref)
+    if os.path.exists(candidate):
+        return "path:" + os.path.abspath(candidate)
+    return ref
+
+
+def is_remote_unpinned_flake_ref(ref: str) -> bool:
+    return SCHEME_RE.match(ref) is not None and not ref.startswith("path:") and "narHash=" not in ref
+
+
+def resolve_flake_metadata(
+    ref: str,
+    allow_fetch: bool,
+    *,
+    runner: Runner,
+    cwd: str,
+    timeout: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized_ref = normalize_flake_ref(ref, cwd)
+    if not allow_fetch and is_remote_unpinned_flake_ref(normalized_ref):
+        raise EvaluationFailure(
+            "Fetch is disabled. Enable Allow fetch or provide a pinned flake URI with narHash.",
+            [
+                {
+                    "mode": "flake-metadata",
+                    "command": build_flake_metadata_command(normalized_ref, allow_fetch),
+                    "returncode": None,
+                    "stderr": "Refusing to resolve an unlocked remote flake while fetch is disabled.",
+                }
+            ],
+        )
+    command = build_flake_metadata_command(normalized_ref, allow_fetch)
+    completed = runner(
+        command,
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+    )
+    attempt = {
+        "mode": "flake-metadata",
+        "command": command,
+        "returncode": completed.returncode,
+        "stderr": completed.stderr[-6000:],
+    }
+    if completed.returncode != 0:
+        raise EvaluationFailure("Could not resolve flake reference.", [attempt])
+
+    try:
+        metadata = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        attempt["stdout"] = completed.stdout[-2000:]
+        attempt["jsonError"] = str(exc)
+        raise EvaluationFailure("Nix returned invalid flake metadata JSON.", [attempt]) from exc
+    return metadata, attempt
+
+
+def flake_metadata_identity(metadata: dict[str, Any]) -> str:
+    url = metadata.get("url")
+    if url:
+        return unquote(url)
+    return json.dumps(metadata.get("locked", metadata), sort_keys=True)
+
+
+def resolve_payload(
+    payload: dict[str, Any],
+    *,
+    runner: Runner | None = None,
+    cwd: str | None = None,
+    timeout: int = 60,
+) -> dict[str, Any]:
+    request = parse_request(payload)
+    runner = runner or subprocess.run
+    cwd = cwd or os.getcwd()
+    system = request.system or current_system(runner=runner, cwd=cwd)
+
+    if not looks_like_flake_ref(request.expression):
+        return {
+            "ok": True,
+            "kind": "expression",
+            "identity": request.expression,
+            "system": system,
+            "attempts": [],
+        }
+
+    metadata, attempt = resolve_flake_metadata(
+        request.expression,
+        request.allow_fetch,
+        runner=runner,
+        cwd=cwd,
+        timeout=timeout,
+    )
+    identity = flake_metadata_identity(metadata)
+    return {
+        "ok": True,
+        "kind": "flake",
+        "identity": identity,
+        "input": request.expression,
+        "system": system,
+        "attempts": [attempt],
+    }
+
+
+def flake_ref_expr(ref: str, system: str | None) -> str:
     return _wrap_input(
-        f'(builtins.getFlake {json.dumps(ref)}).nixosModules',
+        "flake.nixosModules",
+        'if builtins.pathExists (flake.outPath + "/nixos/lib/eval-config.nix") then flake.outPath else <nixpkgs>',
         "flake-nixosModules",
+        evaluator="nixos",
+        system=system,
+        prelude=f"flake = builtins.getFlake {json.dumps(ref)};",
     )
 
 
-def module_collection_expr(expression: str) -> str:
-    return _wrap_input(f"({expression})", "expression-nixosModules")
+def module_collection_expr(expression: str, system: str | None) -> str:
+    return _wrap_input(
+        f"({expression})",
+        "<nixpkgs>",
+        "expression-nixosModules",
+        evaluator="plain",
+        system=system,
+    )
 
 
-def _wrap_input(input_expr: str, mode: str) -> str:
+def _wrap_input(
+    input_expr: str,
+    source_expr: str,
+    mode: str,
+    *,
+    evaluator: str,
+    system: str | None,
+    prelude: str = "",
+) -> str:
     mode_json = json.dumps(mode)
+    system_expr = CURRENT_SYSTEM_EXPR if system is None else json.dumps(system)
+    if evaluator == "nixos":
+        eval_expr = """
+      import (source + "/nixos/lib/eval-config.nix") {
+        inherit modules pkgs;
+        system = null;
+      }
+"""
+    elif evaluator == "plain":
+        eval_expr = """
+      lib.evalModules {
+        inherit modules;
+        specialArgs = {
+          inherit lib pkgs modulesPath;
+        };
+      }
+"""
+    else:
+        raise ValueError(f"unknown evaluator {evaluator!r}")
     return f"""
 let
-  pkgs = import <nixpkgs> {{ system = builtins.currentSystem; }};
+  {prelude}
+  source = {source_expr};
+  selectedSystem = {system_expr};
+  pkgs = import source {{ system = selectedSystem; }};
   lib = pkgs.lib;
+  modulesPath = source + "/nixos/modules";
 
   isModule = value:
     builtins.isFunction value
@@ -109,13 +293,7 @@ let
   render = value:
     let
       modules = moduleValues value;
-      eval = lib.evalModules {{
-        specialArgs = {{
-          inherit pkgs lib;
-          modulesPath = toString (pkgs.path + "/nixos/modules");
-        }};
-        inherit modules;
-      }};
+      eval = {eval_expr};
       docs = pkgs.nixosOptionsDoc {{
         inherit (eval) options;
         warningsAreErrors = false;
@@ -124,6 +302,7 @@ let
     in {{
       ok = true;
       mode = {mode_json};
+      system = selectedSystem;
       moduleNames = moduleNames value;
       moduleCount = builtins.length modules;
       optionCount = builtins.length (builtins.attrNames options);
@@ -145,12 +324,25 @@ def evaluate(
     runner = runner or subprocess.run
     cwd = cwd or os.getcwd()
     candidates: list[tuple[str, str]] = []
+    attempts: list[dict[str, Any]] = []
 
     if looks_like_flake_ref(request.expression):
-        candidates.append(("flake-nixosModules", flake_ref_expr(request.expression)))
-    candidates.append(("expression-nixosModules", module_collection_expr(request.expression)))
+        try:
+            metadata, attempt = resolve_flake_metadata(
+                request.expression,
+                request.allow_fetch,
+                runner=runner,
+                cwd=cwd,
+                timeout=timeout,
+            )
+            attempts.append(attempt)
+            candidates.append(
+                ("flake-nixosModules", flake_ref_expr(flake_metadata_identity(metadata), request.system))
+            )
+        except EvaluationFailure as exc:
+            attempts.extend(exc.attempts)
+    candidates.append(("expression-nixosModules", module_collection_expr(request.expression, request.system)))
 
-    attempts: list[dict[str, Any]] = []
     for mode, nix_expr in candidates:
         command = build_command(nix_expr, request.allow_fetch)
         completed = runner(

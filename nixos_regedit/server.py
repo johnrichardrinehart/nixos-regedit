@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import unquote
 
-from .evaluator import EvaluationFailure, evaluate_payload
+from .evaluator import EvaluationFailure, current_system, evaluate_payload, resolve_payload
 from .tree import build_tree
 
 
@@ -30,11 +30,20 @@ def make_handler(static_dir: Path = STATIC_DIR, evaluator: Evaluator | None = No
 
         def do_GET(self) -> None:
             if self.path == "/api/health":
-                self._json(200, {"ok": True})
+                self._json(200, {"ok": True, "system": current_system()})
                 return
             self._static()
 
         def do_POST(self) -> None:
+            if self.path == "/api/resolve":
+                try:
+                    self._json(200, resolve_payload(self._read_json()))
+                except ValueError as exc:
+                    self._json(400, {"ok": False, "error": str(exc), "attempts": []})
+                except EvaluationFailure as exc:
+                    self._json(422, {"ok": False, "error": exc.error, "attempts": exc.attempts})
+                return
+
             if self.path != "/api/evaluate":
                 self._json(404, {"ok": False, "error": "not found"})
                 return

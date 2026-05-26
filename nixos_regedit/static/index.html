@@ -12,53 +12,53 @@
         <span class="app-icon"></span>
         <span>NixOS Regedit</span>
       </header>
-      <nav class="menubar" aria-label="Menu">
-        <button>File</button>
-        <button>Edit</button>
-        <button>View</button>
-        <button>Favorites</button>
-        <button>Help</button>
-      </nav>
       <section class="toolbar" aria-label="Toolbar">
         <button id="evaluateButton" title="Evaluate expression">Evaluate</button>
         <button id="expandButton" title="Expand visible keys">Expand</button>
         <button id="collapseButton" title="Collapse keys">Collapse</button>
-        <button id="copyPathButton" title="Copy selected path">Copy Path</button>
-        <button id="copyJsonButton" title="Copy selected option JSON">Copy JSON</button>
+        <button id="copyAttributePathButton" title="Copy selected Nix option path">Copy Attribute Path</button>
+        <button id="copyFilesystemPathButton" title="Copy selected declaration file path">Copy Filesystem Path</button>
+        <button id="helpButton" title="Show help">Help</button>
+        <label class="filter-field">
+          <span>Filter</span>
+          <input id="filterInput" type="search" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="system-field">
+          <span>System</span>
+          <input id="systemInput" type="text" autocomplete="off">
+        </label>
         <label class="toggle">
           <input id="allowFetch" type="checkbox">
           <span>Allow fetch</span>
         </label>
       </section>
       <section class="expression-row">
-        <label for="expressionInput">Expression</label>
+        <label for="expressionInput">Nix expression or flake URI</label>
         <textarea id="expressionInput" spellcheck="false" placeholder='github:owner/repo or { default = { lib, ... }: { options.example.enable = lib.mkEnableOption "example"; }; }'></textarea>
       </section>
-      <section class="pathbar">
-        <span>Computer\NixOS</span>
-        <input id="addressInput" readonly value="Computer\NixOS">
+      <section id="evaluatedRow" class="evaluated-row" hidden>
+        <span>Evaluated flake URI</span>
+        <code id="evaluatedExpression"></code>
       </section>
       <section id="diagnostics" class="diagnostics" hidden></section>
-      <section class="content">
+      <section id="content" class="content" hidden>
         <aside class="tree-pane" aria-label="Key tree">
           <div id="tree" class="tree"></div>
         </aside>
         <div class="splitter" aria-hidden="true"></div>
         <section class="details-pane">
-          <div class="filter-row">
-            <label for="filterInput">Find</label>
-            <input id="filterInput" type="search" autocomplete="off">
+          <div id="tableRegion" class="table-region">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Data (Default)</th>
+                </tr>
+              </thead>
+              <tbody id="optionRows"></tbody>
+            </table>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Data</th>
-              </tr>
-            </thead>
-            <tbody id="optionRows"></tbody>
-          </table>
           <section id="optionDetails" class="option-details"></section>
         </section>
       </section>
@@ -67,6 +67,46 @@
         <span id="countText">0 options</span>
       </footer>
     </main>
+    <section id="helpOverlay" class="help-overlay" role="dialog" aria-modal="true" aria-labelledby="helpTitle" hidden>
+      <div class="help-dialog">
+        <header class="help-titlebar">
+          <span id="helpTitle">NixOS Regedit Help</span>
+          <button id="helpCloseButton" type="button" title="Close help">Close</button>
+        </header>
+        <div class="help-body">
+          <section>
+            <h2>Keyboard</h2>
+            <dl>
+              <dt>Ctrl+Enter</dt>
+              <dd>Evaluate the Nix expression or flake URI.</dd>
+              <dt>Enter in Filter</dt>
+              <dd>Apply the current filter immediately.</dd>
+              <dt>Typing in Filter</dt>
+              <dd>Applies automatically after 500ms without typing.</dd>
+              <dt>Esc</dt>
+              <dd>Close this help window.</dd>
+            </dl>
+          </section>
+          <section>
+            <h2>Filter</h2>
+            <p>The filter matches option attribute paths, split on dots. Each query component must fuzzy-match a path component in order.</p>
+            <p><code>svc.ng.en</code> can match <code>services.nginx.enable</code>. <code>fs.name.type</code> can match <code>fileSystems.&lt;name&gt;.fsType</code>.</p>
+          </section>
+          <section>
+            <h2>Fetching</h2>
+            <p>With Allow fetch unchecked, Nix runs offline and unlocked remote flakes are rejected before evaluation. Use a pinned flake URI with <code>narHash</code>, or enable Allow fetch.</p>
+            <p>With Allow fetch checked, the app may resolve and fetch remote flakes. If an impure flake URI is resolved, the pinned evaluated URI is shown as read-only text and used for cache identity.</p>
+          </section>
+          <section>
+            <h2>Input</h2>
+            <p>The input accepts a flake URI whose flake exposes <code>nixosModules</code>, or a Nix expression returning the same shape as <code>nixosModules</code>.</p>
+            <p>An arbitrary expression should return one of these: a NixOS module, a list of NixOS modules, or an attrset whose values are NixOS modules.</p>
+            <p>Modules may be functions like <code>{ lib, pkgs, modulesPath, ... }: { options.example.enable = lib.mkEnableOption "example"; }</code>, or attrsets with module keys such as <code>imports</code>, <code>options</code>, or <code>config</code>.</p>
+            <p>The expression itself can refer to <code>pkgs</code>, <code>lib</code>, and <code>modulesPath</code>. Module functions receive those through module arguments as well.</p>
+          </section>
+        </div>
+      </div>
+    </section>
     <script src="/app.js"></script>
   </body>
 </html>

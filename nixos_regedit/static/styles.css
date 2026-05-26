@@ -48,7 +48,7 @@ button:active {
 
 .window {
   display: grid;
-  grid-template-rows: 24px 24px 32px minmax(86px, 15vh) 28px auto 22px;
+  grid-template-rows: 24px 32px auto auto auto minmax(0, 1fr) 22px;
   height: 100vh;
   min-width: 760px;
   border: 2px solid;
@@ -57,6 +57,7 @@ button:active {
 }
 
 .titlebar {
+  grid-row: 1;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -75,27 +76,15 @@ button:active {
     linear-gradient(#f8d44c 0 33%, #86bf5a 33% 66%, #d65b4a 66%);
 }
 
-.menubar,
 .toolbar,
-.pathbar,
-.filter-row,
 .statusbar {
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
-.menubar {
-  padding: 1px 5px;
-}
-
-.menubar button {
-  min-height: 20px;
-  border-color: transparent;
-  padding: 1px 6px;
-}
-
 .toolbar {
+  grid-row: 2;
   padding: 3px 5px;
   border-top: 1px solid var(--light);
   border-bottom: 1px solid var(--mid);
@@ -105,13 +94,41 @@ button:active {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  white-space: nowrap;
+}
+
+.filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+.filter-field input {
+  width: clamp(160px, 22vw, 320px);
+  height: 20px;
+  padding: 2px 4px;
+}
+
+.system-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   margin-left: auto;
   white-space: nowrap;
 }
 
+.system-field input {
+  width: 150px;
+  height: 20px;
+  padding: 2px 4px;
+}
+
 .expression-row {
+  grid-row: 3;
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 150px 1fr;
   gap: 6px;
   padding: 5px;
   border-top: 1px solid var(--light);
@@ -119,7 +136,8 @@ button:active {
 }
 
 .expression-row label,
-.filter-row label {
+.evaluated-row label,
+.evaluated-row span {
   align-self: start;
   padding-top: 3px;
 }
@@ -134,30 +152,47 @@ input {
 
 textarea {
   width: 100%;
-  height: 74px;
-  resize: none;
+  min-height: 42px;
+  height: 48px;
+  max-height: 32vh;
+  resize: vertical;
   padding: 4px;
   font: 12px Consolas, "Courier New", monospace;
 }
 
-.pathbar {
+.evaluated-row {
+  grid-row: 4;
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 6px;
   padding: 4px 5px;
+  border-bottom: 1px solid var(--mid);
 }
 
-.pathbar span {
-  white-space: nowrap;
+.evaluated-row[hidden] {
+  display: none;
 }
 
-.pathbar input {
+.evaluated-row code {
+  display: block;
   width: 100%;
-  height: 20px;
-  padding: 2px 4px;
+  min-height: 20px;
+  padding: 3px 4px;
+  border: 1px solid;
+  border-color: var(--dark) var(--light) var(--light) var(--dark);
+  background: #eeeeee;
+  color: #333333;
+  font: 12px Consolas, "Courier New", monospace;
+  white-space: nowrap;
+  overflow: auto hidden;
+  user-select: text;
 }
 
 .diagnostics {
-  margin: 0 5px 5px;
+  grid-row: 5;
+  margin: 5px;
   padding: 6px;
-  max-height: 110px;
+  max-height: 160px;
   overflow: auto;
   border: 1px solid;
   border-color: var(--dark) var(--light) var(--light) var(--dark);
@@ -167,10 +202,15 @@ textarea {
 }
 
 .content {
+  grid-row: 6;
   display: grid;
   grid-template-columns: minmax(190px, 28vw) 5px 1fr;
   min-height: 0;
   border-top: 1px solid var(--light);
+}
+
+.content[hidden] {
+  display: none;
 }
 
 .tree-pane,
@@ -192,21 +232,10 @@ textarea {
 }
 
 .details-pane {
-  display: grid;
-  grid-template-rows: 30px minmax(120px, 1fr) minmax(140px, 28vh);
+  display: flex;
+  flex-direction: column;
   margin: 5px 5px 5px 0;
-}
-
-.filter-row {
-  padding: 5px;
-  background: var(--face);
-  border-bottom: 1px solid var(--mid);
-}
-
-.filter-row input {
-  width: 220px;
-  height: 20px;
-  padding: 2px 4px;
+  overflow: hidden;
 }
 
 .tree {
@@ -251,7 +280,19 @@ tr.selected {
   margin-left: 18px;
 }
 
+.table-region {
+  flex: 0 1 auto;
+  max-height: 55%;
+  overflow: auto;
+  background: var(--paper);
+}
+
+.table-region[hidden] {
+  display: none;
+}
+
 table {
+  align-self: start;
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
@@ -283,6 +324,8 @@ th:nth-child(2) {
 }
 
 .option-details {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   border-top: 1px solid var(--mid);
   padding: 7px;
@@ -299,6 +342,92 @@ th:nth-child(2) {
   color: #333;
 }
 
+.help-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 24%);
+  z-index: 10;
+}
+
+.help-overlay[hidden] {
+  display: none;
+}
+
+.help-dialog {
+  width: min(720px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  border: 2px solid;
+  border-color: var(--light) var(--dark) var(--dark) var(--light);
+  background: var(--face);
+  box-shadow: 3px 3px 0 rgb(0 0 0 / 35%);
+}
+
+.help-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 24px;
+  padding: 3px 5px 3px 7px;
+  color: white;
+  background: linear-gradient(90deg, #0a246a, #a6caf0);
+  font-weight: 700;
+}
+
+.help-titlebar button {
+  min-height: 20px;
+  padding: 1px 8px;
+  font-weight: 400;
+}
+
+.help-body {
+  overflow: auto;
+  padding: 8px 10px 10px;
+  border: 1px solid;
+  border-color: var(--dark) var(--light) var(--light) var(--dark);
+  background: #f7f7f7;
+}
+
+.help-body section + section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--mid);
+}
+
+.help-body h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+
+.help-body p {
+  margin: 0 0 6px;
+  line-height: 1.35;
+}
+
+.help-body dl {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 5px 10px;
+  margin: 0;
+}
+
+.help-body dt {
+  font-weight: 700;
+}
+
+.help-body dd {
+  margin: 0;
+}
+
+.help-body code {
+  font: 12px Consolas, "Courier New", monospace;
+}
+
 pre {
   margin: 0;
   white-space: pre-wrap;
@@ -306,15 +435,31 @@ pre {
 }
 
 .statusbar {
-  justify-content: space-between;
-  padding: 2px 5px;
+  grid-row: 7;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+  padding: 2px;
+  background: var(--face);
   border-top: 1px solid var(--light);
+}
+
+.statusbar span {
+  display: flex;
+  align-items: center;
+  min-height: 17px;
+  padding: 0 4px;
+  border: 1px solid;
+  border-color: var(--dark) var(--light) var(--light) var(--dark);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 @media (max-width: 820px) {
   .window {
     min-width: 0;
-    grid-template-rows: 24px 24px 58px minmax(96px, 18vh) 28px auto 22px;
+    grid-template-rows: 24px 58px auto auto auto minmax(0, 1fr) 22px;
   }
 
   .toolbar {
@@ -325,7 +470,8 @@ pre {
     grid-template-columns: 42vw 5px 1fr;
   }
 
-  .filter-row input {
-    width: 100%;
+  .expression-row,
+  .evaluated-row {
+    grid-template-columns: 1fr;
   }
 }

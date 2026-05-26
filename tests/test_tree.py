@@ -19,6 +19,8 @@ class TreeTests(unittest.TestCase):
         tree = build_tree({"programs.zsh.enable": {}})
         self.assertEqual(tree["children"][0]["path"], "programs")
         self.assertEqual(tree["children"][0]["children"][0]["path"], "programs.zsh")
+        self.assertEqual(tree["children"][0]["children"][0]["children"], [])
+        self.assertEqual(tree["children"][0]["children"][0]["optionKeys"], ["programs.zsh.enable"])
 
 
 if __name__ == "__main__":

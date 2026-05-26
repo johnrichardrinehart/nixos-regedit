@@ -37,7 +37,9 @@ class ServerTests(unittest.TestCase):
 
     def test_health_and_static(self):
         base = self.run_server(lambda payload: {"ok": True, "options": {}, "optionCount": 0})
-        self.assertEqual(self.get_json(f"{base}/api/health"), {"ok": True})
+        health = self.get_json(f"{base}/api/health")
+        self.assertTrue(health["ok"])
+        self.assertIsInstance(health["system"], str)
         with urllib.request.urlopen(f"{base}/") as response:
             self.assertIn("text/html", response.headers["Content-Type"])
 

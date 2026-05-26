@@ -7,10 +7,15 @@ import unittest
 from pathlib import Path
 
 from nixos_regedit.evaluator import (
+    EvaluationFailure,
     EvaluationRequest,
+    build_flake_metadata_command,
     build_command,
     evaluate,
     looks_like_flake_ref,
+    normalize_flake_ref,
+    parse_request,
+    resolve_payload,
 )
 
 
@@ -19,15 +24,61 @@ def completed(payload):
 
 
 class EvaluatorUnitTests(unittest.TestCase):
+    def test_system_override_is_optional(self):
+        self.assertIsNone(parse_request({"expression": "{}", "system": ""}).system)
+        self.assertEqual(
+            parse_request({"expression": "{}", "system": "aarch64-linux"}).system,
+            "aarch64-linux",
+        )
+
     def test_offline_flag_tracks_allow_fetch(self):
         self.assertIn("--offline", build_command("1", allow_fetch=False))
         self.assertNotIn("--offline", build_command("1", allow_fetch=True))
+        self.assertIn("--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=False))
+        self.assertNotIn("--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=True))
+
+    def test_resolve_expression_identity_without_flake_metadata(self):
+        result = resolve_payload({"expression": "{ default = {}; }", "system": "x86_64-linux"})
+        self.assertEqual(result["kind"], "expression")
+        self.assertEqual(result["identity"], "{ default = {}; }")
+        self.assertEqual(result["system"], "x86_64-linux")
+
+    def test_resolve_flake_identity_uses_metadata_url(self):
+        calls = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            return completed({"url": "github:owner/repo/rev?narHash=sha256-test"})
+
+        result = resolve_payload(
+            {"expression": "github:owner/repo", "allowFetch": True, "system": "x86_64-linux"},
+            runner=runner,
+        )
+        self.assertEqual(result["kind"], "flake")
+        self.assertEqual(result["identity"], "github:owner/repo/rev?narHash=sha256-test")
+        self.assertEqual(calls[0][-3:], ["metadata", "--json", "github:owner/repo"])
+
+    def test_fetch_disabled_refuses_unpinned_remote_flake_before_nix(self):
+        def runner(command, **kwargs):
+            self.fail("runner should not be called for unlocked remote flakes with fetch disabled")
+
+        with self.assertRaises(EvaluationFailure):
+            resolve_payload(
+                {"expression": "github:owner/repo", "allowFetch": False, "system": "x86_64-linux"},
+                runner=runner,
+            )
 
     def test_flake_ref_detection_is_conservative(self):
         self.assertTrue(looks_like_flake_ref("github:owner/repo"))
         self.assertTrue(looks_like_flake_ref("/tmp/example"))
         self.assertFalse(looks_like_flake_ref("{ default = {}; }"))
         self.assertFalse(looks_like_flake_ref("let x = 1; in x"))
+
+    def test_existing_local_flake_refs_are_normalized_to_path_refs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(normalize_flake_ref(tmp, "/"), f"path:{tmp}")
+            self.assertEqual(normalize_flake_ref(".", tmp), f"path:{tmp}")
+        self.assertEqual(normalize_flake_ref("github:owner/repo", "/"), "github:owner/repo")
 
     def test_expression_mode_is_used_for_non_flake_expression(self):
         calls = []
@@ -36,8 +87,9 @@ class EvaluatorUnitTests(unittest.TestCase):
             calls.append(command)
             return completed({"ok": True, "options": {}, "optionCount": 0, "moduleCount": 0})
 
-        result = evaluate(EvaluationRequest("{ default = {}; }"), runner=runner)
+        result = evaluate(EvaluationRequest("{ default = {}; }", system="aarch64-linux"), runner=runner)
         self.assertEqual(result["mode"], "expression-nixosModules")
+        self.assertIn('"aarch64-linux"', calls[0][-1])
         self.assertEqual(len(calls), 1)
 
     def test_flake_like_input_falls_back_to_expression(self):
@@ -59,6 +111,22 @@ class EvaluatorIntegrationTests(unittest.TestCase):
         os.environ.get("NIXOS_REGEDIT_SKIP_NIX_INTEGRATION") == "1",
         "nix eval inside a Nix build requires recursive-Nix support",
     )
+    def test_expression_single_module(self):
+        expr = r'''
+        { lib, ... }: {
+          options.demo.single = lib.mkEnableOption "single module";
+        }
+        '''
+        result = evaluate(EvaluationRequest(textwrap.dedent(expr)), timeout=180)
+        self.assertIn("demo.single", result["options"])
+        self.assertNotIn("services.nginx.enable", result["options"])
+        self.assertLess(result["optionCount"], 10)
+        self.assertEqual(result["mode"], "expression-nixosModules")
+
+    @unittest.skipIf(
+        os.environ.get("NIXOS_REGEDIT_SKIP_NIX_INTEGRATION") == "1",
+        "nix eval inside a Nix build requires recursive-Nix support",
+    )
     def test_expression_attrset_of_modules(self):
         expr = r'''
         {
@@ -69,6 +137,8 @@ class EvaluatorIntegrationTests(unittest.TestCase):
         '''
         result = evaluate(EvaluationRequest(textwrap.dedent(expr)), timeout=180)
         self.assertIn("demo.enable", result["options"])
+        self.assertNotIn("services.nginx.enable", result["options"])
+        self.assertLess(result["optionCount"], 10)
         self.assertEqual(result["mode"], "expression-nixosModules")
 
     @unittest.skipIf(

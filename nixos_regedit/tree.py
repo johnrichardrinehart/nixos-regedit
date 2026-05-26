@@ -17,8 +17,10 @@ def build_tree(options: dict[str, dict[str, Any]]) -> dict[str, Any]:
     index: dict[tuple[str, ...], dict[str, Any]] = {(): root}
 
     for option_key, option in sorted(options.items()):
+        segments = option_segments(option_key, option)
+        namespace = segments[:-1]
         path: list[str] = []
-        for segment in option_segments(option_key, option):
+        for segment in namespace:
             path.append(segment)
             path_tuple = tuple(path)
             if path_tuple not in index:
