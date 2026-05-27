@@ -135,16 +135,20 @@ button:active {
   display: grid;
   grid-template-columns: 150px 1fr;
   gap: 6px;
-  padding: 5px;
+  padding: 11px 5px 5px;
   border-top: 1px solid var(--light);
   border-bottom: 1px solid var(--mid);
 }
 
-.expression-row label,
 .evaluated-row label,
 .evaluated-row span {
   align-self: start;
   padding-top: 3px;
+}
+
+.expression-row label {
+  align-self: start;
+  padding-top: 5px;
 }
 
 textarea,
@@ -161,7 +165,7 @@ textarea {
   height: 48px;
   max-height: 32vh;
   resize: vertical;
-  padding: 4px;
+  padding: 7px 4px 4px;
   font:
     12px Consolas,
     "Courier New",
