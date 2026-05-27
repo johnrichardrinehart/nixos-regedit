@@ -46,6 +46,46 @@ const elements = {
 let pendingUrlOption = null;
 let pendingUrlExpanded = null;
 let filterTimer = null;
+let evaluatorAvailable = false;
+
+function wasiEvaluator() {
+  const evaluator = window.NixOSRegeditWasiEvaluator || null;
+  if (!evaluator || typeof evaluator.resolve !== "function" || typeof evaluator.evaluate !== "function") {
+    throw new Error("WASI evaluator is not loaded. The standalone page requires window.NixOSRegeditWasiEvaluator with resolve() and evaluate() functions.");
+  }
+  return evaluator;
+}
+
+function refreshEvaluatorAvailability() {
+  const evaluator = window.NixOSRegeditWasiEvaluator || null;
+  evaluatorAvailable = Boolean(
+    evaluator &&
+      typeof evaluator.resolve === "function" &&
+      typeof evaluator.evaluate === "function"
+  );
+  elements.evaluate.disabled = !evaluatorAvailable;
+  if (!evaluatorAvailable) {
+    setStatus("WASI evaluator unavailable");
+    showDiagnostics([
+      "No WASI evaluator is embedded in this build.",
+      "The page does not use an HTTP backend. A real evaluator must be loaded as window.NixOSRegeditWasiEvaluator before evaluation can run.",
+    ]);
+  }
+  return evaluatorAvailable;
+}
+
+async function defaultSystem() {
+  try {
+    const evaluator = wasiEvaluator();
+    if (typeof evaluator.currentSystem === "function") {
+      const system = await evaluator.currentSystem();
+      if (typeof system === "string" && system.trim()) return system.trim();
+    }
+  } catch (error) {
+    return "x86_64-linux";
+  }
+  return "x86_64-linux";
+}
 
 function loadUrlState() {
   const params = new URLSearchParams(window.location.search);
@@ -178,19 +218,9 @@ function resetResults() {
   renderEvaluatedExpression();
 }
 
-async function responsePayload(response) {
-  const text = await response.text();
-  if (!text) return {};
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    return { ok: false, error: text };
-  }
-}
-
 function requestFailureMessage(error) {
   const detail = error && error.message ? error.message : String(error);
-  return `Request failed while evaluating against ${window.location.origin}.\n\n${detail}`;
+  return ["Evaluation failed in the WASI evaluator.", detail].filter(Boolean).join("\n\n");
 }
 
 function openCacheDb() {
@@ -215,12 +245,7 @@ async function cacheKeyFor(identity) {
 }
 
 async function cacheIdentityFor(expression, allowFetch, system) {
-  const response = await fetch("/api/resolve", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ expression, allowFetch, system }),
-  });
-  const payload = await responsePayload(response);
+  const payload = await wasiEvaluator().resolve({ expression, allowFetch, system });
   if (!payload.ok) {
     const attempts = (payload.attempts || []).map((attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`);
     throw new Error([payload.error, ...attempts].filter(Boolean).join("\n\n"));
@@ -259,6 +284,41 @@ function optionSegments(key, option) {
     return option.loc.map(String);
   }
   return key.split(".").filter(Boolean);
+}
+
+function buildTreeFromOptions(options) {
+  const root = { name: "NixOS", path: "", children: [], optionKeys: [] };
+  const childMaps = new WeakMap();
+  const childrenFor = (node) => {
+    let map = childMaps.get(node);
+    if (!map) {
+      map = new Map();
+      childMaps.set(node, map);
+    }
+    return map;
+  };
+  const ensureChild = (node, name, path) => {
+    const children = childrenFor(node);
+    if (children.has(name)) return children.get(name);
+    const child = { name, path, children: [], optionKeys: [] };
+    children.set(name, child);
+    node.children.push(child);
+    return child;
+  };
+
+  Object.entries(options)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .forEach(([key, option]) => {
+      const segments = optionSegments(key, option);
+      let node = root;
+      for (let index = 0; index < segments.length - 1; index += 1) {
+        const path = segments.slice(0, index + 1).join(".");
+        node = ensureChild(node, segments[index], path);
+      }
+      node.optionKeys.push(key);
+    });
+
+  return root;
 }
 
 function normalizeFilterText(value) {
@@ -523,7 +583,7 @@ function renderAll() {
 
 function renderEvaluation(payload, { cached = false } = {}) {
   state.options = payload.options || {};
-  state.tree = payload.tree || { name: "NixOS", path: "", children: [], optionKeys: [] };
+  state.tree = payload.tree || buildTreeFromOptions(state.options);
   state.lastMode = payload.mode || "";
   state.lastOptionCount = payload.optionCount || Object.keys(state.options).length;
   if (pendingUrlExpanded === "all") {
@@ -555,6 +615,7 @@ function renderEvaluation(payload, { cached = false } = {}) {
 }
 
 async function evaluate() {
+  if (!refreshEvaluatorAvailability()) return;
   const expression = elements.expression.value.trim();
   const system = elements.system.value.trim();
   const allowFetch = elements.allowFetch.checked;
@@ -580,16 +641,11 @@ async function evaluate() {
       }
     }
 
-    const response = await fetch("/api/evaluate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        expression: evaluationExpression,
-        allowFetch,
-        system,
-      }),
+    const payload = await wasiEvaluator().evaluate({
+      expression: evaluationExpression,
+      allowFetch,
+      system,
     });
-    const payload = await responsePayload(response);
     if (!payload.ok) {
       const attempts = (payload.attempts || []).map((attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`);
       resetResults();
@@ -716,11 +772,12 @@ document.addEventListener("keydown", (event) => {
 loadUrlState();
 renderEvaluatedExpression();
 renderAll();
+refreshEvaluatorAvailability();
+window.addEventListener("nixos-regedit-evaluator-ready", () => {
+  if (refreshEvaluatorAvailability() && elements.expression.value.trim()) evaluate();
+});
 
-fetch("/api/health")
-  .then((response) => response.json())
-  .then((payload) => {
-    if (payload.system) elements.system.placeholder = payload.system;
-    if (elements.expression.value.trim()) evaluate();
-  })
-  .catch(() => {});
+defaultSystem().then((system) => {
+  elements.system.placeholder = system;
+  if (evaluatorAvailable && elements.expression.value.trim()) evaluate();
+});

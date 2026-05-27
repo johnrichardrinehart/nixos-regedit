@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from urllib.parse import unquote
 from dataclasses import dataclass
@@ -31,10 +32,23 @@ class EvaluationRequest:
 FLAKE_REF_RE = re.compile(r"^[A-Za-z0-9+._:/?=@%~-]+(?:#[A-Za-z0-9+._/?=@%~-]+)?$")
 SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 CURRENT_SYSTEM_EXPR = "builtins.currentSystem"
+HELPER_ENV_VAR = "NIXOS_REGEDIT_EVAL_HELPER"
+DISABLE_HELPER_ENV_VAR = "NIXOS_REGEDIT_DISABLE_EVAL_HELPER"
 
 
 def current_system(*, runner: Runner | None = None, cwd: str | None = None) -> str:
-    runner = runner or subprocess.run
+    if runner is None:
+        completed = run_eval(CURRENT_SYSTEM_EXPR, allow_fetch=False, cwd=cwd or os.getcwd(), timeout=15)
+        if completed.returncode == 0:
+            try:
+                value = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                value = completed.stdout.strip()
+            if isinstance(value, str) and value:
+                return value
+        runner = subprocess.run
+    else:
+        runner = runner
     completed = runner(
         ["nix", "eval", "--raw", "--impure", "--expr", CURRENT_SYSTEM_EXPR],
         cwd=cwd or os.getcwd(),
@@ -86,6 +100,45 @@ def build_command(nix_expr: str, allow_fetch: bool) -> list[str]:
         command.append("--offline")
     command.extend(["--expr", nix_expr])
     return command
+
+
+def eval_helper_path() -> str | None:
+    if os.environ.get(DISABLE_HELPER_ENV_VAR):
+        return None
+    configured = os.environ.get(HELPER_ENV_VAR)
+    if configured:
+        return configured
+    return shutil.which("nixos-regedit-eval-helper")
+
+
+def build_helper_command(allow_fetch: bool, cwd: str) -> list[str]:
+    helper = eval_helper_path()
+    if helper is None:
+        raise FileNotFoundError("nixos-regedit-eval-helper was not found")
+    command = [helper, "--cwd", cwd]
+    if not allow_fetch:
+        command.append("--offline")
+    return command
+
+
+def run_eval(nix_expr: str, *, allow_fetch: bool, cwd: str, timeout: int) -> subprocess.CompletedProcess[str]:
+    helper = eval_helper_path()
+    if helper:
+        return subprocess.run(
+            build_helper_command(allow_fetch, cwd),
+            input=nix_expr,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    return subprocess.run(
+        build_command(nix_expr, allow_fetch),
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+    )
 
 
 def build_flake_metadata_command(ref: str, allow_fetch: bool) -> list[str]:
@@ -321,6 +374,7 @@ def evaluate(
     cwd: str | None = None,
     timeout: int = 120,
 ) -> dict[str, Any]:
+    runner_provided = runner is not None
     runner = runner or subprocess.run
     cwd = cwd or os.getcwd()
     candidates: list[tuple[str, str]] = []
@@ -344,14 +398,21 @@ def evaluate(
     candidates.append(("expression-nixosModules", module_collection_expr(request.expression, request.system)))
 
     for mode, nix_expr in candidates:
-        command = build_command(nix_expr, request.allow_fetch)
-        completed = runner(
-            command,
-            cwd=cwd,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-        )
+        if runner_provided:
+            command = build_command(nix_expr, request.allow_fetch)
+            completed = runner(
+                command,
+                cwd=cwd,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+        else:
+            try:
+                command = build_helper_command(request.allow_fetch, cwd)
+            except FileNotFoundError:
+                command = build_command(nix_expr, request.allow_fetch)
+            completed = run_eval(nix_expr, allow_fetch=request.allow_fetch, cwd=cwd, timeout=timeout)
         attempt = {
             "mode": mode,
             "command": command[:7] + ["..."],

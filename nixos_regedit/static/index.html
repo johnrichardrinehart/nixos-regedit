@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>NixOS Regedit</title>
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <main class="window">
@@ -16,8 +16,8 @@
         <button id="evaluateButton" title="Evaluate expression">Evaluate</button>
         <button id="expandButton" title="Expand visible keys">Expand</button>
         <button id="collapseButton" title="Collapse keys">Collapse</button>
-        <button id="copyAttributePathButton" title="Copy selected Nix option path">Copy Attribute Path</button>
-        <button id="copyFilesystemPathButton" title="Copy selected declaration file path">Copy Filesystem Path</button>
+        <button id="copyAttributePathButton" title="Copy selected NixOS module option attribute path">Copy attr path</button>
+        <button id="copyFilesystemPathButton" title="Copy selected declaration file path">Copy fs path</button>
         <button id="helpButton" title="Show help">Help</button>
         <label class="filter-field">
           <span>Filter</span>
@@ -94,8 +94,8 @@
           </section>
           <section>
             <h2>Fetching</h2>
-            <p>With Allow fetch unchecked, Nix runs offline and unlocked remote flakes are rejected before evaluation. Use a pinned flake URI with <code>narHash</code>, or enable Allow fetch.</p>
-            <p>With Allow fetch checked, the app may resolve and fetch remote flakes. If an impure flake URI is resolved, the pinned evaluated URI is shown as read-only text and used for cache identity.</p>
+            <p>With Allow fetch unchecked, the evaluator runs offline and unlocked remote flakes are rejected before evaluation. Use a pinned flake URI with <code>narHash</code>, or enable Allow fetch.</p>
+            <p>With Allow fetch checked, the evaluator may resolve and fetch remote flakes. If an impure flake URI is resolved, the pinned evaluated URI is shown as read-only text and used for cache identity.</p>
           </section>
           <section>
             <h2>Input</h2>
@@ -104,9 +104,15 @@
             <p>Modules may be functions like <code>{ lib, pkgs, modulesPath, ... }: { options.example.enable = lib.mkEnableOption "example"; }</code>, or attrsets with module keys such as <code>imports</code>, <code>options</code>, or <code>config</code>.</p>
             <p>The expression itself can refer to <code>pkgs</code>, <code>lib</code>, and <code>modulesPath</code>. Module functions receive those through module arguments as well.</p>
           </section>
+          <section>
+            <h2>Standalone</h2>
+            <p>This page does not use an HTTP backend. Evaluation requires a compatible WASI evaluator embedded as <code>window.NixOSRegeditWasiEvaluator</code>.</p>
+          </section>
         </div>
       </div>
     </section>
-    <script src="/app.js"></script>
+    <script src="nixos-regedit-evaluator.js"></script>
+    <script src="evaluator-loader.js"></script>
+    <script src="app.js"></script>
   </body>
 </html>

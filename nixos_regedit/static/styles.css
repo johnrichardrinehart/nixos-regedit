@@ -17,6 +17,7 @@
 html,
 body {
   height: 100%;
+  min-width: 980px;
 }
 
 body {
@@ -50,7 +51,7 @@ button:active {
   display: grid;
   grid-template-rows: 24px 32px auto auto auto minmax(0, 1fr) 22px;
   height: 100vh;
-  min-width: 760px;
+  min-width: 980px;
   border: 2px solid;
   border-color: var(--light) var(--dark) var(--dark) var(--light);
   background: var(--face);
@@ -458,12 +459,7 @@ pre {
 
 @media (max-width: 820px) {
   .window {
-    min-width: 0;
     grid-template-rows: 24px 58px auto auto auto minmax(0, 1fr) 22px;
-  }
-
-  .toolbar {
-    flex-wrap: wrap;
   }
 
   .content {
