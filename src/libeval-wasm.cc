@@ -283,6 +283,9 @@ std::string evaluateToJson(const std::string &expression) {
     if (!ok(ctx.ptr, nix_setting_set(ctx.ptr, "extra-experimental-features", "nix-command flakes"),
             error, "enabling flakes"))
         return failure(error);
+    if (!ok(ctx.ptr, nix_setting_set(ctx.ptr, "tarball-ttl", "900"), error,
+            "configuring tarball TTL"))
+        return failure(error);
     if (!ok(ctx.ptr, nix_setting_set(ctx.ptr, "use-sqlite-wal", "false"), error,
             "configuring SQLite journaling"))
         return failure(error);

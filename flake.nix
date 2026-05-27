@@ -85,6 +85,7 @@
           ./infra/cloudflare/workers/archive-proxy.js
           ./lib
           ./nixos_regedit
+          ./src/libeval-wasm.cc
           ./tests
           ./tools/build_standalone.py
         ];
