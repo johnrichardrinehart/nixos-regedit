@@ -1,3 +1,6 @@
 __pycache__/
 *.py[cod]
+.ruff_cache/
 result
+.direnv/
+.pre-commit-config.yaml

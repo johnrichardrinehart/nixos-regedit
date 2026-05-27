@@ -9,10 +9,12 @@ from pathlib import Path
 from nixos_regedit.evaluator import (
     EvaluationFailure,
     EvaluationRequest,
-    build_flake_metadata_command,
     build_command,
+    build_flake_metadata_command,
     evaluate,
+    flake_ref_expr,
     looks_like_flake_ref,
+    module_collection_expr,
     normalize_flake_ref,
     parse_request,
     resolve_payload,
@@ -34,8 +36,12 @@ class EvaluatorUnitTests(unittest.TestCase):
     def test_offline_flag_tracks_allow_fetch(self):
         self.assertIn("--offline", build_command("1", allow_fetch=False))
         self.assertNotIn("--offline", build_command("1", allow_fetch=True))
-        self.assertIn("--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=False))
-        self.assertNotIn("--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=True))
+        self.assertIn(
+            "--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=False)
+        )
+        self.assertNotIn(
+            "--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=True)
+        )
 
     def test_resolve_expression_identity_without_flake_metadata(self):
         result = resolve_payload({"expression": "{ default = {}; }", "system": "x86_64-linux"})
@@ -87,10 +93,24 @@ class EvaluatorUnitTests(unittest.TestCase):
             calls.append(command)
             return completed({"ok": True, "options": {}, "optionCount": 0, "moduleCount": 0})
 
-        result = evaluate(EvaluationRequest("{ default = {}; }", system="aarch64-linux"), runner=runner)
+        result = evaluate(
+            EvaluationRequest("{ default = {}; }", system="aarch64-linux"), runner=runner
+        )
         self.assertEqual(result["mode"], "expression-nixosModules")
         self.assertIn('"aarch64-linux"', calls[0][-1])
         self.assertEqual(len(calls), 1)
+
+    def test_module_wrapper_uses_vendored_doc_renderer_and_sliced_lib(self):
+        expr = module_collection_expr("{ default = {}; }", "x86_64-linux")
+        self.assertIn("support.lib.nixpkgsLib", expr)
+        self.assertIn("support.lib.nixosOptionsDoc", expr)
+        self.assertNotIn("<nixpkgs>", expr)
+        self.assertNotIn("pkgs.nixosOptionsDoc", expr)
+        self.assertNotIn("/nixos/lib/eval-config.nix", expr)
+
+        flake_expr = flake_ref_expr("github:owner/repo/rev?narHash=sha256-test", "x86_64-linux")
+        self.assertIn("support.lib.nixpkgsLib", flake_expr)
+        self.assertNotIn("<nixpkgs>", flake_expr)
 
     def test_flake_like_input_falls_back_to_expression(self):
         calls = []
@@ -112,11 +132,11 @@ class EvaluatorIntegrationTests(unittest.TestCase):
         "nix eval inside a Nix build requires recursive-Nix support",
     )
     def test_expression_single_module(self):
-        expr = r'''
+        expr = r"""
         { lib, ... }: {
           options.demo.single = lib.mkEnableOption "single module";
         }
-        '''
+        """
         result = evaluate(EvaluationRequest(textwrap.dedent(expr)), timeout=180)
         self.assertIn("demo.single", result["options"])
         self.assertNotIn("services.nginx.enable", result["options"])
@@ -128,13 +148,13 @@ class EvaluatorIntegrationTests(unittest.TestCase):
         "nix eval inside a Nix build requires recursive-Nix support",
     )
     def test_expression_attrset_of_modules(self):
-        expr = r'''
+        expr = r"""
         {
           default = { lib, ... }: {
             options.demo.enable = lib.mkEnableOption "demo";
           };
         }
-        '''
+        """
         result = evaluate(EvaluationRequest(textwrap.dedent(expr)), timeout=180)
         self.assertIn("demo.enable", result["options"])
         self.assertNotIn("services.nginx.enable", result["options"])
@@ -146,7 +166,7 @@ class EvaluatorIntegrationTests(unittest.TestCase):
         "nix eval inside a Nix build requires recursive-Nix support",
     )
     def test_expression_list_of_modules(self):
-        expr = r'''
+        expr = r"""
         [
           ({ lib, ... }: {
             options.demo.name = lib.mkOption {
@@ -156,7 +176,7 @@ class EvaluatorIntegrationTests(unittest.TestCase):
             };
           })
         ]
-        '''
+        """
         result = evaluate(EvaluationRequest(textwrap.dedent(expr)), timeout=180)
         self.assertEqual(result["options"]["demo.name"]["default"]["text"], '"sample"')
 

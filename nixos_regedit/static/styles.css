@@ -24,7 +24,11 @@ body {
   margin: 0;
   color: var(--ink);
   background: #3a6ea5;
-  font: 12px Tahoma, "Segoe UI", Arial, sans-serif;
+  font:
+    12px Tahoma,
+    "Segoe UI",
+    Arial,
+    sans-serif;
 }
 
 button,
@@ -158,7 +162,10 @@ textarea {
   max-height: 32vh;
   resize: vertical;
   padding: 4px;
-  font: 12px Consolas, "Courier New", monospace;
+  font:
+    12px Consolas,
+    "Courier New",
+    monospace;
 }
 
 .evaluated-row {
@@ -183,7 +190,10 @@ textarea {
   border-color: var(--dark) var(--light) var(--light) var(--dark);
   background: #eeeeee;
   color: #333333;
-  font: 12px Consolas, "Courier New", monospace;
+  font:
+    12px Consolas,
+    "Courier New",
+    monospace;
   white-space: nowrap;
   overflow: auto hidden;
   user-select: text;
@@ -200,6 +210,34 @@ textarea {
   background: #fff8dc;
   color: var(--danger);
   white-space: pre-wrap;
+}
+
+.diagnostic-bold {
+  font-weight: 700;
+}
+
+.diagnostic-red {
+  color: #a40000;
+}
+
+.diagnostic-green {
+  color: #0b6e2b;
+}
+
+.diagnostic-yellow {
+  color: #7a5a00;
+}
+
+.diagnostic-blue {
+  color: #174ea6;
+}
+
+.diagnostic-magenta {
+  color: #7b1fa2;
+}
+
+.diagnostic-cyan {
+  color: #006978;
 }
 
 .content {
@@ -426,13 +464,19 @@ th:nth-child(2) {
 }
 
 .help-body code {
-  font: 12px Consolas, "Courier New", monospace;
+  font:
+    12px Consolas,
+    "Courier New",
+    monospace;
 }
 
 pre {
   margin: 0;
   white-space: pre-wrap;
-  font: 12px Consolas, "Courier New", monospace;
+  font:
+    12px Consolas,
+    "Courier New",
+    monospace;
 }
 
 .statusbar {

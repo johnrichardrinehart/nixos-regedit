@@ -5,26 +5,30 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
+import re
 from pathlib import Path
 
 
-def inline_asset(html: str, marker: str, replacement: str) -> str:
-    if marker not in html:
-        raise SystemExit(f"missing marker: {marker}")
-    return html.replace(marker, replacement)
+def inline_asset(html: str, pattern: str, replacement: str) -> str:
+    updated, count = re.subn(pattern, lambda _match: replacement, html, count=1, flags=re.MULTILINE)
+    if count != 1:
+        raise SystemExit(f"missing marker: {pattern}")
+    return updated
 
 
 def inline_script(source: str, source_name: str) -> str:
     # Inline Emscripten output can contain arbitrary bytes encoded as JS text.
     # Base64 keeps the HTML parser away from embedded NULs and script markers.
     encoded = base64.b64encode(source.encode("utf-8")).decode("ascii")
+    source_url = json.dumps(f"\n//# sourceURL={source_name}")
     return f"""<script>
 (() => {{
   const encoded = "{encoded}";
   const binary = atob(encoded);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  (0, eval)(new TextDecoder().decode(bytes) + "\\n//# sourceURL={source_name}");
+  (0, eval)(new TextDecoder().decode(bytes) + {source_url});
 }})();
 </script>"""
 
@@ -45,28 +49,30 @@ def main() -> int:
 
     html = inline_asset(
         html,
-        '<link rel="stylesheet" href="styles.css">',
+        r'<link\s+rel="stylesheet"\s+href="styles\.css"\s*/?>',
         f"<style>\n{css}\n</style>",
     )
     if evaluator_js is None:
-        html = html.replace(
-            '<script src="nixos-regedit-evaluator.js"></script>\n    ',
+        html = re.sub(
+            r'\s*<script\s+src="nix-browser-evaluator\.js"></script>',
             "",
+            html,
+            count=1,
         )
     else:
         html = inline_asset(
             html,
-            '<script src="nixos-regedit-evaluator.js"></script>',
-            inline_script(evaluator_js, "nixos-regedit-evaluator.js"),
+            r'<script\s+src="nix-browser-evaluator\.js"></script>',
+            inline_script(evaluator_js, "nix-browser-evaluator.js"),
         )
     html = inline_asset(
         html,
-        '<script src="evaluator-loader.js"></script>',
+        r'<script\s+src="evaluator-loader\.js"></script>',
         inline_script(loader, "evaluator-loader.js"),
     )
     html = inline_asset(
         html,
-        '<script src="app.js"></script>',
+        r'<script\s+src="app\.js"></script>',
         inline_script(js, "app.js"),
     )
 

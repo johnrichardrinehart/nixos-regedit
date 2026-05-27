@@ -55,21 +55,21 @@ filesystem model.
 The single-page UI does not attempt an HTTP backend. It expects:
 
 ```js
-window.NixOSRegeditWasiEvaluator = {
+window.NixOSRegeditEvaluator = {
   currentSystem: async () => "x86_64-linux",
   resolve: async ({ expression, allowFetch, system }) => ({
     ok: true,
     kind: "expression",
     identity: expression,
-    system
+    system,
   }),
   evaluate: async ({ expression, allowFetch, system }) => ({
     ok: true,
     mode: "expression-nixosModules",
     optionCount: 0,
     options: {},
-    diagnostics: []
-  })
+    diagnostics: [],
+  }),
 };
 ```
 
@@ -77,19 +77,15 @@ The UI builds its option tree in the browser from returned option docs.
 
 ## Emscripten port progress
 
-The current branch now has two browser evaluator targets:
+The current branch now has one browser evaluator target:
 
-- `.#browser-evaluator-smoke`: an Emscripten `SINGLE_FILE` module that exposes
-  the browser contract and proves the single HTML can load a wasm-backed
-  evaluator.
-- `.#browser-evaluator-nix-attempt`: the same browser target shape, but linked
-  against Nix's C API closure.
+- `.#nix-browser-evaluator`: a reusable Emscripten `SINGLE_FILE` module linked
+  against Nix's C API closure. It installs
+  `share/nix-browser-evaluator/nix-browser-evaluator.js` and exports
+  `createNixBrowserEvaluator()`.
 
-The smoke target builds:
-
-```sh
-nix build --builders '' .#browser-evaluator-smoke -L --print-out-paths
-```
+See `docs/nix-browser-evaluator.md` for the JavaScript/C ABI and persistent
+storage integration contract.
 
 The first direct Nix attempt failed because it linked native Linux shared
 objects into an Emscripten link:

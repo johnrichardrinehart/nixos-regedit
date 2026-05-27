@@ -49,91 +49,93 @@ let
     exec ${pkgs.emscripten}/bin/em++ "$@"
   '';
 
-  emscriptenBoost = (pkgs.boost.override {
-    stdenv = pkgs.emscriptenStdenv;
-    enableShared = false;
-    enableStatic = true;
-    enableSingleThreaded = true;
-    enableMultiThreaded = false;
-    enableIcu = false;
-    toolset = "clang";
-    extraB2Args = [
-      "--with-context"
-      "--with-coroutine"
-      "--with-iostreams"
-      "--with-url"
-      "toolset=clang"
-    ];
-  }).overrideAttrs (old: {
-    doCheck = false;
-    preConfigure = ''
-      cat > user-config.jam <<EOF
-      using clang : : ${emscriptenBoostCxx}
-        : <archiver>${pkgs.emscripten}/bin/emar
-          <ranlib>${pkgs.emscripten}/bin/emranlib
-        ;
-      EOF
-    '';
-    configurePhase = ''
-      runHook preConfigure
-      ./bootstrap.sh \
-        --includedir=$dev/include \
-        --libdir=$out/lib \
-        --with-bjam=b2 \
-        --with-toolset=clang \
-        --without-icu
-      substituteInPlace project-config.jam \
-        --replace-fail "using clang ;" \
-        "using clang : : ${emscriptenBoostCxx} : <archiver>${pkgs.emscripten}/bin/emar <ranlib>${pkgs.emscripten}/bin/emranlib ;"
-      runHook postConfigure
-    '';
-    preBuild = ''
-      HOME=$TMPDIR
-      mkdir -p .emscriptencache
-      export EM_CACHE=$(pwd)/.emscriptencache
-    '';
-    buildPhase = ''
-      runHook preBuild
-      b2 \
-        --includedir=$dev/include \
-        --libdir=$out/lib \
-        -j$NIX_BUILD_CORES \
-        --layout=system \
-        variant=release \
-        threading=single \
-        link=static \
-        runtime-link=static \
-        debug-symbols=off \
-        toolset=clang \
-        --with-context \
-        --with-coroutine \
-        --with-iostreams \
-        --with-url
-      runHook postBuild
-    '';
-    installPhase = ''
-      runHook preInstall
-      mkdir -p $dev/share/boostbook
-      cp -a tools/boostbook/{xsl,dtd} $dev/share/boostbook/
-      b2 \
-        --includedir=$dev/include \
-        --libdir=$out/lib \
-        -j$NIX_BUILD_CORES \
-        --layout=system \
-        variant=release \
-        threading=single \
-        link=static \
-        runtime-link=static \
-        debug-symbols=off \
-        toolset=clang \
-        --with-context \
-        --with-coroutine \
-        --with-iostreams \
-        --with-url \
-        install
-      runHook postInstall
-    '';
-  });
+  emscriptenBoost =
+    (pkgs.boost.override {
+      stdenv = pkgs.emscriptenStdenv;
+      enableShared = false;
+      enableStatic = true;
+      enableSingleThreaded = true;
+      enableMultiThreaded = false;
+      enableIcu = false;
+      toolset = "clang";
+      extraB2Args = [
+        "--with-context"
+        "--with-coroutine"
+        "--with-iostreams"
+        "--with-url"
+        "toolset=clang"
+      ];
+    }).overrideAttrs
+      (_old: {
+        doCheck = false;
+        preConfigure = ''
+          cat > user-config.jam <<EOF
+          using clang : : ${emscriptenBoostCxx}
+            : <archiver>${pkgs.emscripten}/bin/emar
+              <ranlib>${pkgs.emscripten}/bin/emranlib
+            ;
+          EOF
+        '';
+        configurePhase = ''
+          runHook preConfigure
+          ./bootstrap.sh \
+            --includedir=$dev/include \
+            --libdir=$out/lib \
+            --with-bjam=b2 \
+            --with-toolset=clang \
+            --without-icu
+          substituteInPlace project-config.jam \
+            --replace-fail "using clang ;" \
+            "using clang : : ${emscriptenBoostCxx} : <archiver>${pkgs.emscripten}/bin/emar <ranlib>${pkgs.emscripten}/bin/emranlib ;"
+          runHook postConfigure
+        '';
+        preBuild = ''
+          HOME=$TMPDIR
+          mkdir -p .emscriptencache
+          export EM_CACHE=$(pwd)/.emscriptencache
+        '';
+        buildPhase = ''
+          runHook preBuild
+          b2 \
+            --includedir=$dev/include \
+            --libdir=$out/lib \
+            -j$NIX_BUILD_CORES \
+            --layout=system \
+            variant=release \
+            threading=single \
+            link=static \
+            runtime-link=static \
+            debug-symbols=off \
+            toolset=clang \
+            --with-context \
+            --with-coroutine \
+            --with-iostreams \
+            --with-url
+          runHook postBuild
+        '';
+        installPhase = ''
+          runHook preInstall
+          mkdir -p $dev/share/boostbook
+          cp -a tools/boostbook/{xsl,dtd} $dev/share/boostbook/
+          b2 \
+            --includedir=$dev/include \
+            --libdir=$out/lib \
+            -j$NIX_BUILD_CORES \
+            --layout=system \
+            variant=release \
+            threading=single \
+            link=static \
+            runtime-link=static \
+            debug-symbols=off \
+            toolset=clang \
+            --with-context \
+            --with-coroutine \
+            --with-iostreams \
+            --with-url \
+            install
+          runHook postInstall
+        '';
+      });
 
   emscriptenZlib = pkgs.stdenvNoCC.mkDerivation {
     pname = "zlib-emscripten";
@@ -374,20 +376,20 @@ let
     '';
   };
 
-  emscriptenMesonLayer =
-    finalAttrs: prevAttrs:
-    {
-      nativeBuildInputs = (prevAttrs.nativeBuildInputs or [ ]) ++ [
-        pkgs.cmake
-        pkgs.emscripten
-        pkgs.meson
-        pkgs.ninja
-        pkgs.perl
-        pkgs.pkg-config
-      ];
-      buildInputs = (prevAttrs.buildInputs or [ ]) ++ nativeDependencyProbeInputs;
+  emscriptenMesonLayer = _finalAttrs: prevAttrs: {
+    nativeBuildInputs = (prevAttrs.nativeBuildInputs or [ ]) ++ [
+      pkgs.cmake
+      pkgs.emscripten
+      pkgs.meson
+      pkgs.ninja
+      pkgs.perl
+      pkgs.pkg-config
+    ];
+    buildInputs = (prevAttrs.buildInputs or [ ]) ++ nativeDependencyProbeInputs;
 
-      mesonFlags = (prevAttrs.mesonFlags or [ ]) ++ [
+    mesonFlags =
+      (prevAttrs.mesonFlags or [ ])
+      ++ [
         "--cross-file=${emscriptenMesonCrossFile}"
         "-Ddefault_library=static"
         "-Db_staticpic=false"
@@ -400,90 +402,88 @@ let
         "-Ds3-aws-auth=disabled"
       ];
 
-      preConfigure =
-        (prevAttrs.preConfigure or "")
-        + ''
-          appendToVar mesonFlags "-Db_lto=false"
-        ''
-        + pkgs.lib.optionalString ((prevAttrs.pname or "") == "nix-util") ''
-          appendToVar mesonFlags "-Dcpuid=disabled"
-        ''
-        + pkgs.lib.optionalString ((prevAttrs.pname or "") == "nix-expr") ''
-          appendToVar mesonFlags "-Dgc=disabled"
-        ''
-        + pkgs.lib.optionalString ((prevAttrs.pname or "") == "nix-store") ''
-          appendToVar mesonFlags "-Dseccomp-sandboxing=disabled"
-          appendToVar mesonFlags "-Ds3-aws-auth=disabled"
-        '';
+    preConfigure =
+      (prevAttrs.preConfigure or "")
+      + ''
+        appendToVar mesonFlags "-Db_lto=false"
+      ''
+      + pkgs.lib.optionalString ((prevAttrs.pname or "") == "nix-util") ''
+        appendToVar mesonFlags "-Dcpuid=disabled"
+      ''
+      + pkgs.lib.optionalString ((prevAttrs.pname or "") == "nix-expr") ''
+        appendToVar mesonFlags "-Dgc=disabled"
+      ''
+      + pkgs.lib.optionalString ((prevAttrs.pname or "") == "nix-store") ''
+        appendToVar mesonFlags "-Dseccomp-sandboxing=disabled"
+        appendToVar mesonFlags "-Ds3-aws-auth=disabled"
+      '';
 
-      postPatch =
-        (prevAttrs.postPatch or "")
-        + ''
-          while IFS= read -r mesonFile; do
-            substituteInPlace "$mesonFile" \
-              --replace-fail "prelink : true" "prelink : false"
-          done < <(grep -rl "prelink : true" . || true)
-          if [ -f args.cc ]; then
-            substituteInPlace args.cc \
-              --replace-fail "std::string(s.begin(), i)" "std::string(s.substr(0, i))"
-          fi
-          if [ -f hilite.cc ]; then
-            sed -i '1a #include <algorithm>' hilite.cc
-          fi
-          if [ -f unix/file-system.cc ]; then
-            perl -0pi -e 's|void setWriteTime\\(\\n    const std::filesystem::path & path, time_t accessedTime, time_t modificationTime, std::optional<bool> optIsSymlink\\)\\n\\{|void setWriteTime(\\n    const std::filesystem::path & path, time_t accessedTime, time_t modificationTime, std::optional<bool> optIsSymlink)\\n{\\n#ifdef __EMSCRIPTEN__\\n    (void) path;\\n    (void) accessedTime;\\n    (void) modificationTime;\\n    (void) optIsSymlink;\\n    return;\\n#endif\\n|s' unix/file-system.cc
-            substituteInPlace unix/file-system.cc \
-              --replace-fail "#if HAVE_UTIMENSAT && HAVE_DECL_AT_SYMLINK_NOFOLLOW" "#if !defined(__EMSCRIPTEN__) && HAVE_UTIMENSAT && HAVE_DECL_AT_SYMLINK_NOFOLLOW" \
-              --replace-fail "#  if HAVE_LUTIMES" "#  if !defined(__EMSCRIPTEN__) && HAVE_LUTIMES"
-          fi
-          if [ -f posix-fs-canonicalise.cc ]; then
-            substituteInPlace posix-fs-canonicalise.cc \
-              --replace-fail "#ifndef _WIN32 // TODO implement" "#if !defined(_WIN32) && !defined(__EMSCRIPTEN__) // TODO implement"
-          fi
-          if [ -f include/nix/store/binary-cache-store.hh ]; then
-            substituteInPlace include/nix/store/binary-cache-store.hh \
-              --replace-fail "constexpr const static std::string realisationsPrefix" "inline const static std::string realisationsPrefix" \
-              --replace-fail "constexpr const static std::string cacheInfoFile" "inline const static std::string cacheInfoFile"
-          fi
-          if [ -f http-binary-cache-store.cc ]; then
-            substituteInPlace http-binary-cache-store.cc \
-              --replace-fail "req.data = {sizeHint, source};" "req.data = {static_cast<size_t>(sizeHint), source};"
-          fi
-          if [ -f filetransfer.cc ]; then
-            cp ${./emscripten-filetransfer.cc} filetransfer.cc
-          fi
-          if [ -f names.cc ]; then
-            substituteInPlace names.cc \
-              --replace-fail "return {s, size_t(p - s)};" "return {&*s, size_t(p - s)};"
-          fi
-          if [ -f serialise.cc ]; then
-            substituteInPlace serialise.cc \
-              --replace-fail "#include <boost/coroutine2/coroutine.hpp>" "" \
-              --replace-fail "#include <boost/coroutine2/protected_fixedsize_stack.hpp>" ""
-            # Emscripten cannot use Boost.Context fcontext. These adapters are only
-            # needed as streaming bridges, so buffer them instead of using stackful
-            # coroutines that require unavailable wasm context switching.
-            perl -0pi -e 's|std::unique_ptr<FinishSink> sourceToSink\(fun<void\(Source &\)> reader\)\n\{.*?\n\}\n\nvoid writePadding|std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)\n{\n    struct SourceToSink : FinishSink\n    {\n        fun<void(Source &)> reader;\n        StringSink buffered;\n\n        SourceToSink(fun<void(Source &)> reader)\n            : reader(reader)\n        {\n        }\n\n        void operator()(std::string_view in) override\n        {\n            buffered(in);\n        }\n\n        void finish() override\n        {\n            StringSource source(buffered.s);\n            reader(source);\n        }\n    };\n\n    return std::make_unique<SourceToSink>(reader);\n}\n\nstd::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)\n{\n    struct BufferedGeneratedSource : Source\n    {\n        std::string buffered;\n        StringSource source;\n        fun<void()> eof;\n\n        BufferedGeneratedSource(std::string && data, fun<void()> eof)\n            : buffered(std::move(data))\n            , source(buffered)\n            , eof(eof)\n        {\n        }\n\n        size_t read(char * data, size_t len) override\n        {\n            try {\n                return source.read(data, len);\n            } catch (EndOfFile &) {\n                eof();\n                unreachable();\n            }\n        }\n    };\n\n    StringSink sink;\n    writer(sink);\n    return std::make_unique<BufferedGeneratedSource>(std::move(sink.s), eof);\n}\n\nvoid writePadding|s' serialise.cc
-            if grep -q 'boost::coroutines2' serialise.cc; then
-              echo 'Emscripten serialise.cc patch failed to remove Boost.Coroutine use' >&2
-              grep -n 'boost::coroutines2\|coroutine<' serialise.cc >&2
-              exit 1
-            fi
-          fi
-          if [ -f primops.cc ]; then
-            substituteInPlace primops.cc \
-              --replace-fail "std::regex_match(str.begin(), str.end(), match, *regex)" "std::regex_match(str.data(), str.data() + str.size(), match, *regex)" \
-              --replace-fail "std::cregex_iterator(str.begin(), str.end(), *regex)" "std::cregex_iterator(str.data(), str.data() + str.size(), *regex)"
-          fi
-          if [ -f meson.build ] && grep -q "toml11 = dependency" meson.build; then
-            perl -0pi -e "s|toml11 = dependency\\(\\n  'toml11',\\n  version : '>=3\\.7\\.0',\\n  method : 'cmake',\\n  include_type : 'system',\\n\\)|toml11 = declare_dependency(\\n  compile_args : ['-isystem', '${pkgs.toml11}/include'],\\n  version : '4.4.0',\\n)|" meson.build
-          fi
-        '';
+    postPatch = (prevAttrs.postPatch or "") + ''
+      while IFS= read -r mesonFile; do
+        substituteInPlace "$mesonFile" \
+          --replace-fail "prelink : true" "prelink : false"
+      done < <(grep -rl "prelink : true" . || true)
+      if [ -f args.cc ]; then
+        substituteInPlace args.cc \
+          --replace-fail "std::string(s.begin(), i)" "std::string(s.substr(0, i))"
+      fi
+      if [ -f hilite.cc ]; then
+        sed -i '1a #include <algorithm>' hilite.cc
+      fi
+      if [ -f unix/file-system.cc ]; then
+        perl -0pi -e 's|void setWriteTime\\(\\n    const std::filesystem::path & path, time_t accessedTime, time_t modificationTime, std::optional<bool> optIsSymlink\\)\\n\\{|void setWriteTime(\\n    const std::filesystem::path & path, time_t accessedTime, time_t modificationTime, std::optional<bool> optIsSymlink)\\n{\\n#ifdef __EMSCRIPTEN__\\n    (void) path;\\n    (void) accessedTime;\\n    (void) modificationTime;\\n    (void) optIsSymlink;\\n    return;\\n#endif\\n|s' unix/file-system.cc
+        substituteInPlace unix/file-system.cc \
+          --replace-fail "#if HAVE_UTIMENSAT && HAVE_DECL_AT_SYMLINK_NOFOLLOW" "#if !defined(__EMSCRIPTEN__) && HAVE_UTIMENSAT && HAVE_DECL_AT_SYMLINK_NOFOLLOW" \
+          --replace-fail "#  if HAVE_LUTIMES" "#  if !defined(__EMSCRIPTEN__) && HAVE_LUTIMES"
+      fi
+      if [ -f posix-fs-canonicalise.cc ]; then
+        substituteInPlace posix-fs-canonicalise.cc \
+          --replace-fail "#ifndef _WIN32 // TODO implement" "#if !defined(_WIN32) && !defined(__EMSCRIPTEN__) // TODO implement"
+      fi
+      if [ -f include/nix/store/binary-cache-store.hh ]; then
+        substituteInPlace include/nix/store/binary-cache-store.hh \
+          --replace-fail "constexpr const static std::string realisationsPrefix" "inline const static std::string realisationsPrefix" \
+          --replace-fail "constexpr const static std::string cacheInfoFile" "inline const static std::string cacheInfoFile"
+      fi
+      if [ -f http-binary-cache-store.cc ]; then
+        substituteInPlace http-binary-cache-store.cc \
+          --replace-fail "req.data = {sizeHint, source};" "req.data = {static_cast<size_t>(sizeHint), source};"
+      fi
+      if [ -f filetransfer.cc ]; then
+        cp ${./emscripten-filetransfer.cc} filetransfer.cc
+      fi
+      if [ -f names.cc ]; then
+        substituteInPlace names.cc \
+          --replace-fail "return {s, size_t(p - s)};" "return {&*s, size_t(p - s)};"
+      fi
+      if [ -f serialise.cc ]; then
+        substituteInPlace serialise.cc \
+          --replace-fail "#include <boost/coroutine2/coroutine.hpp>" "" \
+          --replace-fail "#include <boost/coroutine2/protected_fixedsize_stack.hpp>" ""
+        # Emscripten cannot use Boost.Context fcontext. These adapters are only
+        # needed as streaming bridges, so buffer them instead of using stackful
+        # coroutines that require unavailable wasm context switching.
+        perl -0pi -e 's|std::unique_ptr<FinishSink> sourceToSink\(fun<void\(Source &\)> reader\)\n\{.*?\n\}\n\nvoid writePadding|std::unique_ptr<FinishSink> sourceToSink(fun<void(Source &)> reader)\n{\n    struct SourceToSink : FinishSink\n    {\n        fun<void(Source &)> reader;\n        StringSink buffered;\n\n        SourceToSink(fun<void(Source &)> reader)\n            : reader(reader)\n        {\n        }\n\n        void operator()(std::string_view in) override\n        {\n            buffered(in);\n        }\n\n        void finish() override\n        {\n            StringSource source(buffered.s);\n            reader(source);\n        }\n    };\n\n    return std::make_unique<SourceToSink>(reader);\n}\n\nstd::unique_ptr<Source> sinkToSource(fun<void(Sink &)> writer, fun<void()> eof)\n{\n    struct BufferedGeneratedSource : Source\n    {\n        std::string buffered;\n        StringSource source;\n        fun<void()> eof;\n\n        BufferedGeneratedSource(std::string && data, fun<void()> eof)\n            : buffered(std::move(data))\n            , source(buffered)\n            , eof(eof)\n        {\n        }\n\n        size_t read(char * data, size_t len) override\n        {\n            try {\n                return source.read(data, len);\n            } catch (EndOfFile &) {\n                eof();\n                unreachable();\n            }\n        }\n    };\n\n    StringSink sink;\n    writer(sink);\n    return std::make_unique<BufferedGeneratedSource>(std::move(sink.s), eof);\n}\n\nvoid writePadding|s' serialise.cc
+        if grep -q 'boost::coroutines2' serialise.cc; then
+          echo 'Emscripten serialise.cc patch failed to remove Boost.Coroutine use' >&2
+          grep -n 'boost::coroutines2\|coroutine<' serialise.cc >&2
+          exit 1
+        fi
+      fi
+      if [ -f primops.cc ]; then
+        substituteInPlace primops.cc \
+          --replace-fail "std::regex_match(str.begin(), str.end(), match, *regex)" "std::regex_match(str.data(), str.data() + str.size(), match, *regex)" \
+          --replace-fail "std::cregex_iterator(str.begin(), str.end(), *regex)" "std::cregex_iterator(str.data(), str.data() + str.size(), *regex)"
+      fi
+      if [ -f meson.build ] && grep -q "toml11 = dependency" meson.build; then
+        perl -0pi -e "s|toml11 = dependency\\(\\n  'toml11',\\n  version : '>=3\\.7\\.0',\\n  method : 'cmake',\\n  include_type : 'system',\\n\\)|toml11 = declare_dependency(\\n  compile_args : ['-isystem', '${pkgs.toml11}/include'],\\n  version : '4.4.0',\\n)|" meson.build
+      fi
+    '';
 
-      doCheck = false;
-      doInstallCheck = false;
-      separateDebugInfo = false;
-    };
+    doCheck = false;
+    doInstallCheck = false;
+    separateDebugInfo = false;
+  };
 in
 (pkgs.nix.overrideAllMesonComponents emscriptenMesonLayer)
 // {

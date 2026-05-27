@@ -1,45 +1,138 @@
 {
   description = "Local Registry Editor-style browser for NixOS module options";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs";
+    git-hooks = {
+      url = "github:cachix/git-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      git-hooks,
+      treefmt-nix,
+    }:
     let
+      fs = nixpkgs.lib.fileset;
       systems = [
         "x86_64-linux"
         "aarch64-linux"
       ];
+      projectFileset = fs.unions [
+        ./.clang-format
+        ./.envrc
+        ./.github
+        ./.gitignore
+        ./README.md
+        ./docs
+        ./flake.lock
+        ./flake.nix
+        ./lib
+        ./nix
+        ./nixos_regedit
+        ./pyproject.toml
+        ./src
+        ./tests
+        ./tools
+        ./treefmt.nix
+      ];
+      projectSource = fs.toSource {
+        root = ./.;
+        fileset = projectFileset;
+      };
+      evaluatorSource = fs.toSource {
+        root = ./src;
+        fileset = ./src/browser-evaluator-nix.cc;
+      };
+      standaloneSource = fs.toSource {
+        root = ./.;
+        fileset = fs.unions [
+          ./nixos_regedit/static
+          ./tools/build_standalone.py
+        ];
+      };
+      backendSource = fs.toSource {
+        root = ./.;
+        fileset = ./nixos_regedit;
+      };
+      testSource = fs.toSource {
+        root = ./.;
+        fileset = fs.unions [
+          ./.github/workflows/pages.yml
+          ./lib
+          ./nixos_regedit
+          ./tests
+          ./tools/build_standalone.py
+        ];
+      };
+      nixpkgsLibSource =
+        let
+          libPrefix = "${nixpkgs}/lib";
+        in
+        nixpkgs.lib.sources.cleanSourceWith {
+          src = nixpkgs;
+          filter = path: _type: path == libPrefix || nixpkgs.lib.hasPrefix "${libPrefix}/" path;
+        };
+      nixpkgsLibFileset = fs.fromSource nixpkgsLibSource;
+      nixpkgsLib = import "${nixpkgsLibSource}/lib";
       forAllSystems = nixpkgs.lib.genAttrs systems;
+      pkgsFor = system: import nixpkgs { inherit system; };
+      treefmtEval =
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        treefmt-nix.lib.evalModule pkgs ./treefmt.nix;
+      preCommitCheck =
+        system:
+        let
+          pkgs = pkgsFor system;
+        in
+        git-hooks.lib.${system}.run {
+          src = projectSource;
+          hooks = {
+            actionlint.enable = true;
+            check-json.enable = true;
+            check-merge-conflicts.enable = true;
+            check-python.enable = true;
+            check-symlinks.enable = true;
+            check-toml.enable = true;
+            treefmt = {
+              enable = true;
+              packageOverrides.treefmt = (treefmtEval system).config.build.wrapper;
+            };
+            deadnix.enable = true;
+            statix.enable = true;
+            check-yaml.enable = true;
+            "ruff-check" = {
+              enable = true;
+              name = "ruff check";
+              entry = "${pkgs.ruff}/bin/ruff check";
+              files = "\\.py$";
+              types = [ "python" ];
+            };
+          };
+        };
     in
     {
+      lib = {
+        nixosOptionsDoc = import ./lib/nixos-options-doc.nix;
+        inherit nixpkgsLib nixpkgsLibFileset nixpkgsLibSource;
+      };
+
       packages = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = pkgsFor system;
           nixEmscriptenComponents = import ./nix/emscripten-nix-components.nix { inherit pkgs; };
-          nixEmscriptenLinkInputs = [
-            nixEmscriptenComponents.libs.nix-util
-            nixEmscriptenComponents.libs.nix-util-c
-            nixEmscriptenComponents.libs.nix-store
-            nixEmscriptenComponents.libs.nix-store-c
-            nixEmscriptenComponents.libs.nix-fetchers
-            nixEmscriptenComponents.libs.nix-fetchers-c
-            nixEmscriptenComponents.libs.nix-expr
-            nixEmscriptenComponents.libs.nix-expr-c
-            nixEmscriptenComponents.libs.nix-flake
-            nixEmscriptenComponents.libs.nix-flake-c
-            pkgs.boost
-            pkgs.brotli
-            pkgs.curl
-            pkgs.libarchive
-            pkgs.libblake3
-            pkgs.libgit2
-            pkgs.libsodium
-            pkgs.openssl
-            pkgs.sqlite
-            pkgs.onetbb
-          ];
           nixEmscriptenCIncludes = [
             nixEmscriptenComponents.libs.nix-util-c.dev
             nixEmscriptenComponents.libs.nix-store-c.dev
@@ -124,58 +217,10 @@
             (wholeArchive "${nixEmscriptenComponents.emscriptenDeps.zlib}/lib/libz.a")
             (wholeArchive "${emscriptenSqlite}/lib/libsqlite3.a")
           ];
-          eval-helper = pkgs.stdenv.mkDerivation {
-            pname = "nixos-regedit-eval-helper";
+          nixBrowserEvaluator = pkgs.stdenvNoCC.mkDerivation {
+            pname = "nix-browser-evaluator";
             version = "0.1.0";
-            src = ./.;
-            nativeBuildInputs = [ pkgs.pkg-config ];
-            buildInputs = [
-              pkgs.nix.dev
-              pkgs.nix
-            ];
-            buildPhase = ''
-              runHook preBuild
-              $CXX -std=c++23 -O2 src/nixos-regedit-eval-helper.cc \
-                $(pkg-config --cflags --libs nix-expr-c nix-flake-c nix-store-c nix-util-c) \
-                -o nixos-regedit-eval-helper
-              runHook postBuild
-            '';
-            installPhase = ''
-              runHook preInstall
-              install -Dm755 nixos-regedit-eval-helper $out/bin/nixos-regedit-eval-helper
-              runHook postInstall
-            '';
-          };
-          browser-evaluator-smoke = pkgs.stdenvNoCC.mkDerivation {
-            pname = "nixos-regedit-browser-evaluator-smoke";
-            version = "0.1.0";
-            src = ./.;
-            nativeBuildInputs = [ pkgs.emscripten ];
-            buildPhase = ''
-              runHook preBuild
-              HOME=$TMPDIR
-              mkdir -p .emscriptencache
-              export EM_CACHE=$(pwd)/.emscriptencache
-              emcc src/browser-evaluator-smoke.c -O2 \
-                -sMODULARIZE=1 \
-                -sEXPORT_NAME=createNixosRegeditEvaluatorSmoke \
-                -sSINGLE_FILE=1 \
-                -sEXPORTED_FUNCTIONS='["_nixos_regedit_eval_smoke"]' \
-                -sEXPORTED_RUNTIME_METHODS='["cwrap","UTF8ToString"]' \
-                -o nixos-regedit-evaluator-smoke.js
-              runHook postBuild
-            '';
-            installPhase = ''
-              runHook preInstall
-              install -Dm644 nixos-regedit-evaluator-smoke.js \
-                $out/share/nixos-regedit/nixos-regedit-evaluator-smoke.js
-              runHook postInstall
-            '';
-          };
-          browser-evaluator-nix-attempt = pkgs.stdenvNoCC.mkDerivation {
-            pname = "nixos-regedit-browser-evaluator-nix-attempt";
-            version = "0.1.0";
-            src = ./.;
+            src = evaluatorSource;
             nativeBuildInputs = [
               pkgs.emscripten
             ];
@@ -190,10 +235,10 @@
               export EM_CACHE=$(pwd)/.emscriptencache
               em++ -std=c++23 -O2 -fexceptions \
                 ${pkgs.lib.concatMapStringsSep " " (input: "-I${input}/include") nixEmscriptenCIncludes} \
-                src/browser-evaluator-nix.cc \
+                browser-evaluator-nix.cc \
                 ${pkgs.lib.concatStringsSep " " nixEmscriptenArchives} \
                 -sMODULARIZE=1 \
-                -sEXPORT_NAME=createNixosRegeditEvaluator \
+                -sEXPORT_NAME=createNixBrowserEvaluator \
                 -sSINGLE_FILE=1 \
                 -sFORCE_FILESYSTEM=1 \
                 -sALLOW_MEMORY_GROWTH=1 \
@@ -201,53 +246,44 @@
                 -sASSERTIONS=2 \
                 -sDISABLE_EXCEPTION_CATCHING=0 \
                 -sERROR_ON_UNDEFINED_SYMBOLS=1 \
-                -sEXPORTED_FUNCTIONS='["_nixos_regedit_eval_nix","_nixos_regedit_current_system","_malloc","_free"]' \
+                -sEXPORTED_FUNCTIONS='["_libeval_wasm","_libeval_wasm_current_system","_malloc","_free"]' \
                 -sEXPORTED_RUNTIME_METHODS='["cwrap","UTF8ToString","getExceptionMessage","FS","IDBFS","ENV"]' \
                 -lidbfs.js \
-                -o nixos-regedit-evaluator.js
+                -o nix-browser-evaluator.js
               runHook postBuild
             '';
             installPhase = ''
               runHook preInstall
-              install -Dm644 nixos-regedit-evaluator.js \
+              install -Dm644 nix-browser-evaluator.js \
+                $out/share/nix-browser-evaluator/nix-browser-evaluator.js
+              mkdir -p $out/share/nixos-regedit
+              ln -s ../nix-browser-evaluator/nix-browser-evaluator.js \
                 $out/share/nixos-regedit/nixos-regedit-evaluator.js
               runHook postInstall
             '';
           };
-          nix-util-c-emscripten-meson-probe = nixEmscriptenComponents.libs.nix-util-c.overrideAttrs (old: {
-            pname = "nixos-regedit-nix-util-c-emscripten-meson-probe";
-            meta = (old.meta or { }) // {
-              description = "Probe build for Nix's nix-util-c component through an Emscripten Meson cross file";
-            };
-          });
-          nix-store-c-emscripten-meson-probe = nixEmscriptenComponents.libs.nix-store-c.overrideAttrs (old: {
-            pname = "nixos-regedit-nix-store-c-emscripten-meson-probe";
-            meta = (old.meta or { }) // {
-              description = "Probe build for Nix's nix-store-c component through an Emscripten Meson cross file";
-            };
-          });
-          nix-fetchers-c-emscripten-meson-probe = nixEmscriptenComponents.libs.nix-fetchers-c.overrideAttrs (old: {
-            pname = "nixos-regedit-nix-fetchers-c-emscripten-meson-probe";
-            meta = (old.meta or { }) // {
-              description = "Probe build for Nix's nix-fetchers-c component through an Emscripten Meson cross file";
-            };
-          });
-          nix-expr-c-emscripten-meson-probe = nixEmscriptenComponents.libs.nix-expr-c.overrideAttrs (old: {
-            pname = "nixos-regedit-nix-expr-c-emscripten-meson-probe";
-            meta = (old.meta or { }) // {
-              description = "Probe build for Nix's nix-expr-c component through an Emscripten Meson cross file";
-            };
-          });
-          nix-flake-c-emscripten-meson-probe = nixEmscriptenComponents.libs.nix-flake-c.overrideAttrs (old: {
-            pname = "nixos-regedit-nix-flake-c-emscripten-meson-probe";
-            meta = (old.meta or { }) // {
-              description = "Probe build for Nix's nix-flake-c component through an Emscripten Meson cross file";
-            };
-          });
+          backend = pkgs.stdenvNoCC.mkDerivation {
+            pname = "nixos-regedit-server";
+            version = "0.1.0";
+            src = backendSource;
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/lib/nixos-regedit $out/bin
+              cp -r nixos_regedit $out/lib/nixos-regedit/
+              makeWrapper ${pkgs.python3}/bin/python $out/bin/nixos-regedit \
+                --add-flags "-m nixos_regedit.server" \
+                --prefix PYTHONPATH : "$out/lib/nixos-regedit" \
+                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nix ]} \
+                --set NIX_PATH nixpkgs=${nixpkgs} \
+                --set NIXOS_REGEDIT_FLAKE_REF path:${projectSource}
+              runHook postInstall
+            '';
+          };
           standalone = pkgs.stdenvNoCC.mkDerivation {
             pname = "nixos-regedit";
             version = "0.1.0";
-            src = ./.;
+            src = standaloneSource;
             nativeBuildInputs = [
               pkgs.makeWrapper
               pkgs.python3
@@ -256,7 +292,7 @@
               runHook preInstall
               python tools/build_standalone.py \
                 --static-dir nixos_regedit/static \
-                --evaluator-js ${browser-evaluator-nix-attempt}/share/nixos-regedit/nixos-regedit-evaluator.js \
+                --evaluator-js ${nixBrowserEvaluator}/share/nix-browser-evaluator/nix-browser-evaluator.js \
                 --out $out/share/nixos-regedit/index.html
               mkdir -p $out/bin
               makeWrapper ${pkgs.coreutils}/bin/printf $out/bin/nixos-regedit \
@@ -267,15 +303,8 @@
           };
         in
         {
-          inherit eval-helper;
-          inherit browser-evaluator-smoke;
-          inherit browser-evaluator-nix-attempt;
-          inherit nix-util-c-emscripten-meson-probe;
-          inherit nix-store-c-emscripten-meson-probe;
-          inherit nix-fetchers-c-emscripten-meson-probe;
-          inherit nix-expr-c-emscripten-meson-probe;
-          inherit nix-flake-c-emscripten-meson-probe;
-          inherit standalone;
+          nix-browser-evaluator = nixBrowserEvaluator;
+          inherit backend standalone;
 
           default = standalone;
         }
@@ -284,49 +313,94 @@
       apps = forAllSystems (system: {
         default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/nixos-regedit";
+          program = "${self.packages.${system}.backend}/bin/nixos-regedit";
+        };
+        backend = {
+          type = "app";
+          program = "${self.packages.${system}.backend}/bin/nixos-regedit";
+        };
+        standalone = {
+          type = "app";
+          program = "${self.packages.${system}.standalone}/bin/nixos-regedit";
         };
       });
+
+      formatter = forAllSystems (
+        system:
+        let
+          pkgs = pkgsFor system;
+          treefmtWrapper = (treefmtEval system).config.build.wrapper;
+          preCommit = preCommitCheck system;
+        in
+        pkgs.writeShellApplication {
+          name = "nixos-regedit-format";
+          runtimeInputs = [
+            treefmtWrapper
+            preCommit.config.package
+          ];
+          text = ''
+            treefmt "$@"
+            if [ "$#" -eq 0 ]; then
+              pre-commit run -c ${preCommit.config.configFile} --all-files
+            else
+              pre-commit run -c ${preCommit.config.configFile} --files "$@"
+            fi
+          '';
+        }
+      );
 
       checks = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = pkgsFor system;
         in
         {
-          unit = pkgs.runCommand "nixos-regedit-tests"
-            {
-              nativeBuildInputs = [
-                self.packages.${system}.eval-helper
-                pkgs.nix
-                pkgs.python3
-              ];
-              NIX_PATH = "nixpkgs=${nixpkgs}";
-              NIXOS_REGEDIT_SKIP_NIX_INTEGRATION = "1";
-            }
-            ''
-              cp -r ${./.} source
-              chmod -R u+w source
-              cd source
-              python -m unittest discover -s tests -v
-              touch $out
-            '';
+          formatting = (treefmtEval system).config.build.check projectSource;
+          pre-commit = preCommitCheck system;
+          browser-evaluator = self.packages.${system}.nix-browser-evaluator;
+          standalone = self.packages.${system}.standalone;
+          unit =
+            pkgs.runCommand "nixos-regedit-tests"
+              {
+                nativeBuildInputs = [
+                  pkgs.nix
+                  pkgs.python3
+                ];
+                NIX_PATH = "nixpkgs=${nixpkgs}";
+                NIXOS_REGEDIT_SKIP_NIX_INTEGRATION = "1";
+              }
+              ''
+                cp -r ${testSource} source
+                chmod -R u+w source
+                cd source
+                python -m unittest discover -s tests -v
+                touch $out
+              '';
         }
       );
 
       devShells = forAllSystems (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = pkgsFor system;
+          preCommit = preCommitCheck system;
         in
         {
           default = pkgs.mkShell {
-            packages = [
-              self.packages.${system}.eval-helper
+            packages = preCommit.enabledPackages ++ [
+              self.formatter.${system}
+              (treefmtEval system).config.build.wrapper
+              pkgs.clang-tools
+              pkgs.deadnix
+              pkgs.prettier
+              pkgs.ruff
+              pkgs.statix
+              pkgs.taplo
               pkgs.nix
               pkgs.pkg-config
               pkgs.python3
             ];
+            inherit (preCommit) shellHook;
             NIX_PATH = "nixpkgs=${nixpkgs}";
           };
         }

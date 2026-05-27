@@ -47,36 +47,52 @@ let pendingUrlOption = null;
 let pendingUrlExpanded = null;
 let filterTimer = null;
 let evaluatorAvailable = false;
+let evaluatorLoadSettled = Boolean(
+  window.NixOSRegeditEvaluator || window.NixOSRegeditWasmEvaluator,
+);
 
-function wasiEvaluator() {
-  const evaluator = window.NixOSRegeditWasiEvaluator || null;
-  if (!evaluator || typeof evaluator.resolve !== "function" || typeof evaluator.evaluate !== "function") {
-    throw new Error("WASI evaluator is not loaded. The standalone page requires window.NixOSRegeditWasiEvaluator with resolve() and evaluate() functions.");
+function regeditEvaluator() {
+  const evaluator = window.NixOSRegeditEvaluator || window.NixOSRegeditWasmEvaluator || null;
+  if (
+    !evaluator ||
+    typeof evaluator.resolve !== "function" ||
+    typeof evaluator.evaluate !== "function"
+  ) {
+    throw new Error(
+      "Evaluator is not loaded. NixOS Regedit requires an evaluator with resolve() and evaluate() functions.",
+    );
   }
   return evaluator;
 }
 
 function refreshEvaluatorAvailability() {
-  const evaluator = window.NixOSRegeditWasiEvaluator || null;
+  const evaluator = window.NixOSRegeditEvaluator || window.NixOSRegeditWasmEvaluator || null;
   evaluatorAvailable = Boolean(
     evaluator &&
-      typeof evaluator.resolve === "function" &&
-      typeof evaluator.evaluate === "function"
+    typeof evaluator.resolve === "function" &&
+    typeof evaluator.evaluate === "function",
   );
   elements.evaluate.disabled = !evaluatorAvailable;
-  if (!evaluatorAvailable) {
-    setStatus("WASI evaluator unavailable");
+  if (evaluatorAvailable) {
+    if (!elements.diagnostics.hidden && elements.diagnostics.textContent.includes("No evaluator")) {
+      showDiagnostics([]);
+    }
+  } else if (evaluatorLoadSettled) {
+    setStatus("Evaluator unavailable");
     showDiagnostics([
-      "No WASI evaluator is embedded in this build.",
-      "The page does not use an HTTP backend. A real evaluator must be loaded as window.NixOSRegeditWasiEvaluator before evaluation can run.",
+      "No evaluator is available in this build.",
+      "Load a browser evaluator or run the Python backend app before evaluating.",
     ]);
+  } else {
+    setStatus("Loading evaluator");
+    showDiagnostics([]);
   }
   return evaluatorAvailable;
 }
 
 async function defaultSystem() {
   try {
-    const evaluator = wasiEvaluator();
+    const evaluator = regeditEvaluator();
     if (typeof evaluator.currentSystem === "function") {
       const system = await evaluator.currentSystem();
       if (typeof system === "string" && system.trim()) return system.trim();
@@ -129,7 +145,11 @@ function updateUrlState() {
   if (system) params.set("system", system);
   if (filter) params.set("filter", filter);
   if (elements.allowFetch.checked) params.set("fetch", "1");
-  if (state.selectionExplicit && state.selectedOptionKey && state.selectedOptionKey !== defaultOptionKeyForUrl()) {
+  if (
+    state.selectionExplicit &&
+    state.selectedOptionKey &&
+    state.selectedOptionKey !== defaultOptionKeyForUrl()
+  ) {
     params.set("option", state.selectedOptionKey);
   }
   const expanded = Array.from(state.expanded).filter(Boolean).sort();
@@ -190,14 +210,92 @@ function setStatus(message) {
   elements.status.textContent = message;
 }
 
+function appendDiagnosticText(parent, text, classes) {
+  if (!text) return;
+  const span = document.createElement("span");
+  span.textContent = text;
+  classes.forEach((className) => span.classList.add(className));
+  parent.appendChild(span);
+}
+
+function diagnosticClasses(state) {
+  const classes = [];
+  if (state.bold) classes.push("diagnostic-bold");
+  if (state.color) classes.push(`diagnostic-${state.color}`);
+  return classes;
+}
+
+function applySgr(state, codes) {
+  if (codes.length === 0) codes = [0];
+  codes.forEach((code) => {
+    if (code === 0) {
+      state.bold = false;
+      state.color = "";
+    } else if (code === 1) {
+      state.bold = true;
+    } else if (code === 22) {
+      state.bold = false;
+    } else if (code === 39) {
+      state.color = "";
+    } else if (code === 31) {
+      state.color = "red";
+    } else if (code === 32) {
+      state.color = "green";
+    } else if (code === 33) {
+      state.color = "yellow";
+    } else if (code === 34) {
+      state.color = "blue";
+    } else if (code === 35) {
+      state.color = "magenta";
+    } else if (code === 36) {
+      state.color = "cyan";
+    }
+  });
+}
+
+function renderDiagnosticMessage(message) {
+  const fragment = document.createDocumentFragment();
+  const state = { bold: false, color: "" };
+  const text = String(message || "");
+  const escapePattern = /\u001b\][\s\S]*?(?:\u0007|\u001b\\)|\u001b\[[0-?]*[ -/]*[@-~]/g;
+  let lastIndex = 0;
+  for (const match of text.matchAll(escapePattern)) {
+    appendDiagnosticText(fragment, text.slice(lastIndex, match.index), diagnosticClasses(state));
+    lastIndex = match.index + match[0].length;
+    const sgr = match[0].match(/^\u001b\[([0-9;]*)m$/);
+    if (sgr) {
+      applySgr(
+        state,
+        sgr[1]
+          .split(";")
+          .filter(Boolean)
+          .map((part) => Number(part)),
+      );
+    }
+  }
+  appendDiagnosticText(fragment, text.slice(lastIndex), diagnosticClasses(state));
+  return fragment;
+}
+
+function cleanedDiagnosticText(message) {
+  return String(message || "")
+    .replace(/^evaluating expression:\s*/i, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
 function showDiagnostics(messages) {
   if (!messages || messages.length === 0) {
     elements.diagnostics.hidden = true;
-    elements.diagnostics.textContent = "";
+    elements.diagnostics.replaceChildren();
     return;
   }
   elements.diagnostics.hidden = false;
-  elements.diagnostics.textContent = messages.join("\n\n");
+  elements.diagnostics.replaceChildren();
+  messages.forEach((message, index) => {
+    if (index > 0) elements.diagnostics.appendChild(document.createTextNode("\n\n"));
+    elements.diagnostics.appendChild(renderDiagnosticMessage(cleanedDiagnosticText(message)));
+  });
 }
 
 function resetResults() {
@@ -220,7 +318,7 @@ function resetResults() {
 
 function requestFailureMessage(error) {
   const detail = error && error.message ? error.message : String(error);
-  return ["Evaluation failed in the WASI evaluator.", detail].filter(Boolean).join("\n\n");
+  return ["Evaluation failed.", detail].filter(Boolean).join("\n\n");
 }
 
 function openCacheDb() {
@@ -245,9 +343,11 @@ async function cacheKeyFor(identity) {
 }
 
 async function cacheIdentityFor(expression, allowFetch, system) {
-  const payload = await wasiEvaluator().resolve({ expression, allowFetch, system });
+  const payload = await regeditEvaluator().resolve({ expression, allowFetch, system });
   if (!payload.ok) {
-    const attempts = (payload.attempts || []).map((attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`);
+    const attempts = (payload.attempts || []).map(
+      (attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`,
+    );
     throw new Error([payload.error, ...attempts].filter(Boolean).join("\n\n"));
   }
   return {
@@ -322,14 +422,13 @@ function buildTreeFromOptions(options) {
 }
 
 function normalizeFilterText(value) {
-  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
 }
 
 function filterParts(value = state.filterText) {
-  return value
-    .split(".")
-    .map(normalizeFilterText)
-    .filter(Boolean);
+  return value.split(".").map(normalizeFilterText).filter(Boolean);
 }
 
 function fuzzyMatchComponent(needle, haystack) {
@@ -382,12 +481,14 @@ function filteredTreeNode(node, matchingKeys) {
 function visibleTree(parts = filterParts()) {
   if (parts.length === 0) return state.tree;
   const matchingKeys = new Set(filteredEntries(parts).map(([key]) => key));
-  return filteredTreeNode(state.tree, matchingKeys) || {
-    name: "NixOS",
-    path: "",
-    children: [],
-    optionKeys: [],
-  };
+  return (
+    filteredTreeNode(state.tree, matchingKeys) || {
+      name: "NixOS",
+      path: "",
+      children: [],
+      optionKeys: [],
+    }
+  );
 }
 
 function ensureVisibleSelection(parts = filterParts()) {
@@ -568,7 +669,11 @@ function renderDetails() {
   add("Default", formatData(option.default), true);
   add("Example", formatData(option.example), true);
   add("Description", formatData(option.description), true);
-  add("Declarations", Array.isArray(option.declarations) ? option.declarations.join("\n") : "", true);
+  add(
+    "Declarations",
+    Array.isArray(option.declarations) ? option.declarations.join("\n") : "",
+    true,
+  );
   add("Related packages", formatData(option.relatedPackages), true);
 
   elements.details.replaceChildren(grid);
@@ -594,7 +699,9 @@ function renderEvaluation(payload, { cached = false } = {}) {
     state.expanded = new Set(["", ...(pendingUrlExpanded || [])]);
   }
   state.selectedPath = state.tree.children[0] ? state.tree.children[0].path : "";
-  state.selectedOptionKey = state.tree.children[0] ? state.tree.children[0].optionKeys[0] || null : null;
+  state.selectedOptionKey = state.tree.children[0]
+    ? state.tree.children[0].optionKeys[0] || null
+    : null;
   state.selectionExplicit = false;
   if (pendingUrlOption) {
     selectOptionKey(pendingUrlOption, { expand: true, explicit: true });
@@ -619,7 +726,8 @@ async function evaluate() {
   const expression = elements.expression.value.trim();
   const system = elements.system.value.trim();
   const allowFetch = elements.allowFetch.checked;
-  const evaluationExpression = !allowFetch && state.evaluatedExpression ? state.evaluatedExpression : expression;
+  const evaluationExpression =
+    !allowFetch && state.evaluatedExpression ? state.evaluatedExpression : expression;
   if (!expression) {
     resetResults();
     showDiagnostics(["expression is required"]);
@@ -631,7 +739,8 @@ async function evaluate() {
   showDiagnostics([]);
   try {
     const cacheIdentity = await cacheIdentityFor(evaluationExpression, allowFetch, system);
-    state.evaluatedExpression = cacheIdentity && cacheIdentity.kind === "flake" ? cacheIdentity.identity : null;
+    state.evaluatedExpression =
+      cacheIdentity && cacheIdentity.kind === "flake" ? cacheIdentity.identity : null;
     const cacheKey = cacheIdentity ? await cacheKeyFor(cacheIdentity) : null;
     if (cacheKey) {
       const cached = await cacheGet(cacheKey);
@@ -641,13 +750,15 @@ async function evaluate() {
       }
     }
 
-    const payload = await wasiEvaluator().evaluate({
+    const payload = await regeditEvaluator().evaluate({
       expression: evaluationExpression,
       allowFetch,
       system,
     });
     if (!payload.ok) {
-      const attempts = (payload.attempts || []).map((attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`);
+      const attempts = (payload.attempts || []).map(
+        (attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`,
+      );
       resetResults();
       showDiagnostics([payload.error, ...attempts]);
       setStatus("Evaluation failed");
@@ -750,12 +861,17 @@ elements.collapse.addEventListener("click", () => {
   renderTree();
   updateUrlState();
 });
-elements.copyAttributePath.addEventListener("click", () => copyText(state.selectedOptionKey || state.selectedPath));
+elements.copyAttributePath.addEventListener("click", () =>
+  copyText(state.selectedOptionKey || state.selectedPath),
+);
 elements.copyFilesystemPath.addEventListener("click", () => {
   const option = state.selectedOptionKey ? state.options[state.selectedOptionKey] : null;
   const total = option && Array.isArray(option.declarations) ? option.declarations.length : 0;
   const index = total > 0 ? (state.declarationCopyIndex % total) + 1 : 0;
-  copyText(selectedDeclarationPath(), total > 0 ? `Copied filesystem path ${index} of ${total}` : "No filesystem path");
+  copyText(
+    selectedDeclarationPath(),
+    total > 0 ? `Copied filesystem path ${index} of ${total}` : "No filesystem path",
+  );
 });
 elements.help.addEventListener("click", openHelp);
 elements.helpClose.addEventListener("click", closeHelp);
@@ -774,8 +890,20 @@ renderEvaluatedExpression();
 renderAll();
 refreshEvaluatorAvailability();
 window.addEventListener("nixos-regedit-evaluator-ready", () => {
+  evaluatorLoadSettled = true;
   if (refreshEvaluatorAvailability() && elements.expression.value.trim()) evaluate();
 });
+window.addEventListener("nixos-regedit-evaluator-failed", (event) => {
+  evaluatorLoadSettled = true;
+  refreshEvaluatorAvailability();
+  if (event.detail) showDiagnostics([String(event.detail)]);
+});
+window.setTimeout(() => {
+  if (!evaluatorAvailable) {
+    evaluatorLoadSettled = true;
+    refreshEvaluatorAvailability();
+  }
+}, 15000);
 
 defaultSystem().then((system) => {
   elements.system.placeholder = system;

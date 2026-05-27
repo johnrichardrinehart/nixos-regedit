@@ -5,13 +5,14 @@
     return JSON.stringify(String(value));
   }
 
-  function decodeCString(module, ptr) {
-    if (typeof module.UTF8ToString === "function") return module.UTF8ToString(ptr);
-    return "";
-  }
-
   function looksLikePayload(value) {
-    return value && typeof value === "object" && value.ok === true && value.options && typeof value.options === "object";
+    return (
+      value &&
+      typeof value === "object" &&
+      value.ok === true &&
+      value.options &&
+      typeof value.options === "object"
+    );
   }
 
   function failure(error) {
@@ -25,51 +26,14 @@
     return FLAKE_REF_RE.test(stripped);
   }
 
-  function browserReadableFlakeRef(value) {
-    const stripped = String(value || "").trim();
-    const lower = stripped.toLowerCase();
-    const nixpkgs = "github:nixos/nixpkgs";
-    if (lower === nixpkgs || lower === `${nixpkgs}/nixpkgs-unstable` || lower === `${nixpkgs}/master`) {
-      return "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz";
-    }
-    if (lower === `${nixpkgs}/nixos-unstable`) {
-      return "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
-    }
-    return stripped;
-  }
-
-  function isOfficialNixpkgsRef(value) {
-    const lower = String(value || "").trim().toLowerCase();
-    return (
-      lower === "github:nixos/nixpkgs" ||
-      lower === "github:nixos/nixpkgs/master" ||
-      lower === "github:nixos/nixpkgs/nixpkgs-unstable" ||
-      lower === "github:nixos/nixpkgs/nixos-unstable" ||
-      lower === "https://channels.nixos.org/nixpkgs-unstable/nixexprs.tar.xz" ||
-      lower === "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
-    );
-  }
-
   function browserModuleExpression(expression, system) {
-    const flakeRef = looksLikeFlakeRef(expression) ? browserReadableFlakeRef(expression) : null;
-    const officialNixpkgs = flakeRef && isOfficialNixpkgsRef(expression);
-    const inputExpression = looksLikeFlakeRef(expression)
-      ? `(builtins.getFlake ${nixString(flakeRef)}).nixosModules`
-      : `(${expression})`;
-    const rawOptionsExpression = officialNixpkgs
-      ? `(
-        let
-          flake = builtins.getFlake ${nixString(flakeRef)};
-          eval = builtins.scopedImport builtins (flake.outPath + "/nixos/lib/eval-config.nix") {
-            inherit system;
-            modules = [ ];
-          };
-        in eval.options
-      )`
-      : `mergeAttrs (map (module: module.options or { }) modules)`;
+    const flakeRef = looksLikeFlakeRef(expression) ? String(expression || "").trim() : null;
+    const inputExpression = flakeRef ? "flake.nixosModules" : `(${expression})`;
     return `
 let
   system = ${system ? nixString(system) : "builtins.currentSystem"};
+  flake = ${flakeRef ? `builtins.getFlake ${nixString(flakeRef)}` : "null"};
+  hasFlake = flake != null;
   concatStringsSep = sep: list:
     builtins.concatStringsSep sep (map builtins.toString list);
   sanitize = value:
@@ -90,7 +54,7 @@ let
     else if builtins.isFunction type then "<function>"
     else builtins.toString type;
   literalExpression = text: { _type = "literalExpression"; text = builtins.toString text; };
-  lib = rec {
+  fallbackLib = rec {
     inherit concatStringsSep literalExpression;
     mdDoc = text: text;
     literalMD = text: text;
@@ -139,11 +103,21 @@ let
       description = "Whether to enable " + builtins.toString description + ".";
     };
   };
-  pkgs = {
+  lib =
+    if hasFlake && flake ? lib && flake.lib ? evalModules
+    then flake.lib
+    else fallbackLib;
+  fallbackPkgs = {
     inherit lib;
     stdenv = { hostPlatform = { inherit system; }; };
   };
-  modulesPath = "/nixos/modules";
+  pkgs =
+    if hasFlake && flake ? legacyPackages && builtins.hasAttr system flake.legacyPackages
+    then builtins.getAttr system flake.legacyPackages
+    else fallbackPkgs;
+  flakeModulesPath = if hasFlake && flake ? outPath then flake.outPath + "/nixos/modules" else "/nixos/modules";
+  flakeModuleList = flakeModulesPath + "/module-list.nix";
+  modulesPath = if builtins.pathExists flakeModulesPath then flakeModulesPath else "/nixos/modules";
   input = ${inputExpression};
   isModule = value:
     builtins.isFunction value
@@ -163,9 +137,18 @@ let
        else if builtins.isAttrs called then
          [ called ] ++ builtins.concatMap flattenModule (called.imports or [ ])
        else [ ];
-  modules = builtins.concatMap flattenModule inputModules;
+  baseModules = if hasFlake && builtins.pathExists flakeModuleList then import flakeModuleList else [ ];
+  modules = baseModules ++ inputModules;
+  flattenedModules = builtins.concatMap flattenModule inputModules;
   mergeAttrs = builtins.foldl' lib.recursiveUpdate { };
-  rawOptions = ${rawOptionsExpression};
+  rawOptions =
+    if lib ? evalModules then
+      (lib.evalModules {
+        inherit modules;
+        specialArgs = { inherit lib pkgs modulesPath; };
+      }).options
+    else
+      mergeAttrs (map (module: module.options or { }) flattenedModules);
   isOption = value: builtins.isAttrs value && (value._type or null) == "option";
   safeSanitize = value:
     let attempted = builtins.tryEval (builtins.deepSeq (sanitize value) (sanitize value));
@@ -235,7 +218,7 @@ in {
             if (error) reject(error);
             else resolve();
           });
-        })
+        }),
     );
     module.__nixosRegeditSyncQueue = next.catch(() => {});
     return next;
@@ -318,45 +301,51 @@ in {
   }
 
   async function loadEvaluator() {
-    if (typeof createNixosRegeditEvaluator !== "function") return false;
-    const module = await createNixosRegeditEvaluator();
+    const createEvaluator = window.createNixBrowserEvaluator || window.createNixosRegeditEvaluator;
+    if (typeof createEvaluator !== "function") return false;
+    const module = await createEvaluator();
     const storage = await preparePersistentStorage(module);
-    const evaluateRaw = module.cwrap("nixos_regedit_eval_nix", "number", ["string"]);
-    const currentSystemRaw = module.cwrap("nixos_regedit_current_system", "number", []);
+    const evaluateRaw = module.cwrap("libeval_wasm", "string", ["string"]);
+    const currentSystemRaw = module.cwrap("libeval_wasm_current_system", "string", []);
     const evalNix = async (expression) => {
-      const ptr = evaluateRaw(expression);
-      const response = JSON.parse(decodeCString(module, ptr));
+      const response = JSON.parse(evaluateRaw(expression));
       await syncfs(module, false);
       return response;
     };
-    window.NixOSRegeditWasiEvaluator = {
+    window.NixOSRegeditWasmEvaluator = {
       storage,
-      currentSystem: async () => decodeCString(module, currentSystemRaw()),
+      currentSystem: async () => currentSystemRaw(),
       resolve: async (request) => {
         const input = String(request.expression || "").trim();
-        const identity = looksLikeFlakeRef(input) ? browserReadableFlakeRef(input) : input;
+        const isFlakeRef = looksLikeFlakeRef(input);
         return {
           ok: true,
-          kind: identity !== input ? "flake" : "expression",
-          identity,
-          system: request.system || decodeCString(module, currentSystemRaw()),
+          kind: isFlakeRef ? "flake" : "expression",
+          identity: input,
+          system: request.system || currentSystemRaw(),
         };
       },
       evaluate: async (request) => {
-        const system = request.system || decodeCString(module, currentSystemRaw());
+        const system = request.system || currentSystemRaw();
         const rawResponse = await evalNix(request.expression);
         if (looksLikePayload(rawResponse)) return rawResponse;
         const wrappedResponse = await evalNix(browserModuleExpression(request.expression, system));
         if (wrappedResponse && wrappedResponse.ok === false) return wrappedResponse;
         if (looksLikePayload(wrappedResponse)) return wrappedResponse;
         if (rawResponse && rawResponse.ok === false) return rawResponse;
-        return failure("The browser evaluator ran the Nix expression, but it did not return a NixOS module, module list, nixosModules attrset, or NixOS Regedit payload.");
+        return failure(
+          "The browser evaluator ran the Nix expression, but it did not return a NixOS module, module list, nixosModules attrset, or NixOS Regedit payload.",
+        );
       },
     };
+    window.NixOSRegeditEvaluator = window.NixOSRegeditWasmEvaluator;
     window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-ready"));
     return true;
   }
 
   window.NixOSRegeditLoadEvaluator = loadEvaluator;
-  loadEvaluator();
+  loadEvaluator().catch((error) => {
+    const detail = error && error.message ? error.message : error;
+    window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-failed", { detail }));
+  });
 })();
