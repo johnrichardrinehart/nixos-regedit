@@ -284,17 +284,40 @@ function cleanedDiagnosticText(message) {
     .trimEnd();
 }
 
+function browserNetworkFailureHint(message) {
+  const text = String(message || "");
+  if (
+    !/browser fetch failed|Failed to execute 'send' on 'XMLHttpRequest'|Failed to load 'https?:\/\//i.test(
+      text,
+    )
+  ) {
+    return "";
+  }
+  return [
+    "Browser network failure: the browser could not read the remote URL.",
+    "The browser API does not expose enough detail to reliably distinguish CORS, DNS, TLS, offline, or remote-server failures.",
+    "If this is a GitHub archive URL in the standalone page, CORS is the likely cause. Use the Python backend app or a CORS-readable pinned archive.",
+  ].join("\n");
+}
+
+function diagnosticMessageParts(message) {
+  const cleaned = cleanedDiagnosticText(message);
+  const hint = browserNetworkFailureHint(cleaned);
+  return [hint, cleaned].filter(Boolean);
+}
+
 function showDiagnostics(messages) {
-  if (!messages || messages.length === 0) {
+  const parts = (messages || []).flatMap(diagnosticMessageParts);
+  if (parts.length === 0) {
     elements.diagnostics.hidden = true;
     elements.diagnostics.replaceChildren();
     return;
   }
   elements.diagnostics.hidden = false;
   elements.diagnostics.replaceChildren();
-  messages.forEach((message, index) => {
+  parts.forEach((message, index) => {
     if (index > 0) elements.diagnostics.appendChild(document.createTextNode("\n\n"));
-    elements.diagnostics.appendChild(renderDiagnosticMessage(cleanedDiagnosticText(message)));
+    elements.diagnostics.appendChild(renderDiagnosticMessage(message));
   });
 }
 
@@ -787,13 +810,35 @@ async function copyText(text, message = "Copied path") {
 }
 
 function selectedDeclarationPath() {
-  const option = state.selectedOptionKey ? state.options[state.selectedOptionKey] : null;
+  const option = selectedDeclarationOption();
   if (option && Array.isArray(option.declarations) && option.declarations.length > 0) {
     const index = state.declarationCopyIndex % option.declarations.length;
     state.declarationCopyIndex += 1;
     return option.declarations[index];
   }
   return "";
+}
+
+function optionUnderSelectedPath(optionKey, option) {
+  if (!state.selectedPath) return true;
+  const segments = optionSegments(optionKey, option);
+  const selected = state.selectedPath.split(".").filter(Boolean);
+  return selected.every((segment, index) => segments[index] === segment);
+}
+
+function selectedDeclarationOption() {
+  const rowOption = state.selectedOptionKey ? state.options[state.selectedOptionKey] : null;
+  if (rowOption && Array.isArray(rowOption.declarations) && rowOption.declarations.length > 0) {
+    return rowOption;
+  }
+
+  const parts = filterParts();
+  const entry = Object.entries(state.options)
+    .filter(([key, option]) => optionUnderSelectedPath(key, option))
+    .filter(([key, option]) => optionMatchesFilter(key, option, parts))
+    .filter(([, option]) => Array.isArray(option.declarations) && option.declarations.length > 0)
+    .sort(([left], [right]) => left.localeCompare(right))[0];
+  return entry ? entry[1] : null;
 }
 
 function applyFilter() {
@@ -865,7 +910,7 @@ elements.copyAttributePath.addEventListener("click", () =>
   copyText(state.selectedOptionKey || state.selectedPath),
 );
 elements.copyFilesystemPath.addEventListener("click", () => {
-  const option = state.selectedOptionKey ? state.options[state.selectedOptionKey] : null;
+  const option = selectedDeclarationOption();
   const total = option && Array.isArray(option.declarations) ? option.declarations.length : 0;
   const index = total > 0 ? (state.declarationCopyIndex % total) + 1 : 0;
   copyText(

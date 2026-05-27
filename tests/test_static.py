@@ -20,6 +20,8 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("renderDiagnosticMessage", app)
         self.assertIn("applySgr", app)
         self.assertIn("evaluating expression", app)
+        self.assertIn("Browser network failure", app)
+        self.assertIn("CORS, DNS, TLS, offline, or remote-server failures", app)
         index = Path("nixos_regedit/static/index.html").read_text()
         self.assertIn("evaluator-loader.js", index)
         self.assertIn("nix-browser-evaluator.js", index)

@@ -30,22 +30,18 @@
           <span>Filter</span>
           <input id="filterInput" type="search" autocomplete="off" spellcheck="false" />
         </label>
-        <label class="system-field">
-          <span>System</span>
-          <input id="systemInput" type="text" autocomplete="off" />
-        </label>
-        <label class="toggle">
-          <input id="allowFetch" type="checkbox" />
-          <span>Allow fetch</span>
-        </label>
       </section>
       <section class="expression-row">
-        <label for="expressionInput">Nix expression or flake URI</label>
+        <label class="expression-label" for="expressionInput">Nix expression or flake URI</label>
         <textarea
           id="expressionInput"
           spellcheck="false"
           placeholder='github:owner/repo or { default = { lib, ... }: { options.example.enable = lib.mkEnableOption "example"; }; }'
         ></textarea>
+        <label class="system-label" for="systemInput">System</label>
+        <input id="systemInput" class="system-input" type="text" autocomplete="off" />
+        <label class="fetch-label" for="allowFetch">Allow fetch</label>
+        <input id="allowFetch" class="fetch-input" type="checkbox" />
       </section>
       <section id="evaluatedRow" class="evaluated-row" hidden>
         <span>Evaluated flake URI</span>

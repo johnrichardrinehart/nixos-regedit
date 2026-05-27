@@ -96,9 +96,10 @@ button:active {
 }
 
 .toggle {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   white-space: nowrap;
 }
 
@@ -116,26 +117,27 @@ button:active {
   padding: 2px 4px;
 }
 
-.system-field {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  white-space: nowrap;
-}
-
-.system-field input {
-  width: 150px;
+.system-input {
+  width: 126px;
   height: 20px;
   padding: 2px 4px;
+}
+
+.fetch-input {
+  width: 14px;
+  height: 14px;
+  align-self: center;
+  margin: 0;
 }
 
 .expression-row {
   grid-row: 3;
   display: grid;
-  grid-template-columns: 150px 1fr;
-  gap: 6px;
-  padding: 11px 5px 5px;
+  grid-template-columns: 220px minmax(0, 1fr);
+  grid-auto-rows: min-content;
+  column-gap: 10px;
+  row-gap: 7px;
+  padding: 8px;
   border-top: 1px solid var(--light);
   border-bottom: 1px solid var(--mid);
 }
@@ -146,9 +148,18 @@ button:active {
   padding-top: 3px;
 }
 
-.expression-row label {
-  align-self: start;
-  padding-top: 5px;
+.expression-row > label {
+  grid-column: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.expression-label,
+.system-label,
+.fetch-label {
+  grid-column: 1;
+  align-self: center;
+  padding-top: 2px;
 }
 
 textarea,
@@ -160,16 +171,26 @@ input {
 }
 
 textarea {
+  grid-column: 2;
+  grid-row: 1;
   width: 100%;
-  min-height: 42px;
-  height: 48px;
+  min-height: 24px;
+  height: 26px;
   max-height: 32vh;
   resize: vertical;
-  padding: 7px 4px 4px;
+  padding: 4px;
   font:
     12px Consolas,
     "Courier New",
     monospace;
+}
+
+.system-input {
+  grid-column: 2;
+}
+
+.fetch-input {
+  grid-column: 2;
 }
 
 .evaluated-row {
@@ -517,5 +538,15 @@ pre {
   .expression-row,
   .evaluated-row {
     grid-template-columns: 1fr;
+  }
+
+  .expression-label,
+  textarea,
+  .system-label,
+  .system-input,
+  .fetch-label,
+  .fetch-input {
+    grid-column: 1;
+    grid-row: auto;
   }
 }
