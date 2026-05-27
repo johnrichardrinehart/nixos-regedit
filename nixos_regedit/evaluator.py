@@ -171,13 +171,9 @@ def normalize_flake_ref(ref: str, cwd: str) -> str:
     return ref
 
 
-def is_remote_unpinned_flake_ref(ref: str) -> bool:
+def is_remote_flake_ref(ref: str) -> bool:
     base, _selector = split_flake_selector(ref)
-    return (
-        SCHEME_RE.match(base) is not None
-        and not base.startswith("path:")
-        and "narHash=" not in base
-    )
+    return SCHEME_RE.match(base) is not None and not base.startswith("path:")
 
 
 def resolve_flake_metadata(
@@ -189,17 +185,15 @@ def resolve_flake_metadata(
     timeout: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     normalized_ref = normalize_flake_ref(ref, cwd)
-    if not allow_fetch and is_remote_unpinned_flake_ref(normalized_ref):
+    if not allow_fetch and is_remote_flake_ref(normalized_ref):
         raise EvaluationFailure(
-            "Fetch is disabled. Enable Allow fetch or provide a pinned flake URI with narHash.",
+            "Fetch is disabled. Enable Allow fetch to use remote flake references.",
             [
                 {
                     "mode": "flake-metadata",
                     "command": build_flake_metadata_command(normalized_ref, allow_fetch),
                     "returncode": None,
-                    "stderr": (
-                        "Refusing to resolve an unlocked remote flake while fetch is disabled."
-                    ),
+                    "stderr": ("Refusing to resolve a remote flake while fetch is disabled."),
                 }
             ],
         )
@@ -307,12 +301,27 @@ def flake_ref_expr(
     if flake ? legacyPackages && builtins.hasAttr selectedSystem flake.legacyPackages
     then builtins.getAttr selectedSystem flake.legacyPackages
     else fallbackPkgs;
+  flakeNixosSystemLib =
+    if flake ? lib && flake.lib ? nixosSystem
+    then flake.lib
+    else if flake ? inputs
+      && flake.inputs ? nixpkgs
+      && flake.inputs.nixpkgs ? lib
+      && flake.inputs.nixpkgs.lib ? nixosSystem
+    then flake.inputs.nixpkgs.lib
+    else null;
 """,
         modules_path_expr=(
             'if builtins.pathExists flakeModulesPath then flakeModulesPath else "/nixos/modules"'
         ),
         pkgs_expr="flakePkgs",
         module_source_expr=json.dumps(f"flake attribute .#{selected_path}"),
+        nixos_system_options_expr=(
+            "if flakeNixosSystemLib != null "
+            "then (flakeNixosSystemLib.nixosSystem { system = selectedSystem; "
+            "modules = modules; }).options "
+            "else null"
+        ),
     )
 
 
@@ -330,6 +339,15 @@ def flake_module_list_expr(ref: str, system: str | None) -> str:
     if flake ? legacyPackages && builtins.hasAttr selectedSystem flake.legacyPackages
     then builtins.getAttr selectedSystem flake.legacyPackages
     else fallbackPkgs;
+  flakeNixosSystemLib =
+    if flake ? lib && flake.lib ? nixosSystem
+    then flake.lib
+    else if flake ? inputs
+      && flake.inputs ? nixpkgs
+      && flake.inputs.nixpkgs ? lib
+      && flake.inputs.nixpkgs.lib ? nixosSystem
+    then flake.inputs.nixpkgs.lib
+    else null;
 """,
         base_modules_expr=f"""
           if builtins.pathExists flakeModuleList
@@ -341,6 +359,12 @@ def flake_module_list_expr(ref: str, system: str | None) -> str:
         ),
         pkgs_expr="flakePkgs",
         module_source_expr=json.dumps("nixos/modules/module-list.nix"),
+        nixos_system_options_expr=(
+            "if flakeNixosSystemLib != null "
+            "then (flakeNixosSystemLib.nixosSystem { system = selectedSystem; "
+            "modules = modules; }).options "
+            "else null"
+        ),
     )
 
 
@@ -356,9 +380,30 @@ let
   support = builtins.getFlake {self_ref};
   selectedSystem = {system_expr};
   nixosOptionsDoc = support.lib.nixosOptionsDoc;
+  safeDocValue = fallback: value:
+    let attempted = builtins.tryEval (builtins.deepSeq value value);
+    in if attempted.success then attempted.value else fallback;
+  safeDocField = option: name: fallback:
+    if builtins.hasAttr name option
+    then safeDocValue fallback (builtins.getAttr name option)
+    else fallback;
+  safeDocOption = option: option // {{
+    declarations = safeDocField option "declarations" [];
+    default = safeDocField option "default" (safeDocField option "defaultText" null);
+    description = safeDocField option "description" "";
+    example = safeDocField option "example" (safeDocField option "exampleText" null);
+    readOnly = safeDocField option "readOnly" false;
+    relatedPackages = safeDocField option "relatedPackages" [];
+    type = safeDocField option "type" "unspecified";
+  }};
   lib =
     if flake ? lib && flake.lib ? nixosSystem
     then flake.lib
+    else if flake ? inputs
+      && flake.inputs ? nixpkgs
+      && flake.inputs.nixpkgs ? lib
+      && flake.inputs.nixpkgs.lib ? nixosSystem
+    then flake.inputs.nixpkgs.lib
     else throw {marker};
   eval = lib.nixosSystem {{
     system = selectedSystem;
@@ -367,6 +412,7 @@ let
   docs = nixosOptionsDoc {{
     inherit lib;
     inherit (eval) options;
+    transformOptions = safeDocOption;
     warningsAreErrors = false;
   }};
   options = docs.optionsNix;
@@ -376,7 +422,10 @@ in {{
   system = selectedSystem;
   moduleNames = [ "nixosSystem" ];
   moduleCount = 0;
-  moduleSource = "flake.lib.nixosSystem";
+  moduleSource =
+    if flake ? lib && flake.lib ? nixosSystem
+    then "flake.lib.nixosSystem"
+    else "flake.inputs.nixpkgs.lib.nixosSystem";
   optionCount = builtins.length (builtins.attrNames options);
   inherit options;
   diagnostics = [];
@@ -402,6 +451,7 @@ def _wrap_input(
     modules_path_expr: str = '"/nixos/modules"',
     pkgs_expr: str = "fallbackPkgs",
     module_source_expr: str = json.dumps("input expression"),
+    nixos_system_options_expr: str = "null",
 ) -> str:
     mode_json = json.dumps(mode)
     system_expr = CURRENT_SYSTEM_EXPR if system is None else json.dumps(system)
@@ -413,6 +463,22 @@ let
   selectedSystem = {system_expr};
   lib = support.lib.nixpkgsLib;
   nixosOptionsDoc = support.lib.nixosOptionsDoc;
+  safeDocValue = fallback: value:
+    let attempted = builtins.tryEval (builtins.deepSeq value value);
+    in if attempted.success then attempted.value else fallback;
+  safeDocField = option: name: fallback:
+    if builtins.hasAttr name option
+    then safeDocValue fallback (builtins.getAttr name option)
+    else fallback;
+  safeDocOption = option: option // {{
+    declarations = safeDocField option "declarations" [];
+    default = safeDocField option "default" (safeDocField option "defaultText" null);
+    description = safeDocField option "description" "";
+    example = safeDocField option "example" (safeDocField option "exampleText" null);
+    readOnly = safeDocField option "readOnly" false;
+    relatedPackages = safeDocField option "relatedPackages" [];
+    type = safeDocField option "type" "unspecified";
+  }};
   modulesPath = {modules_path_expr};
   fallbackPkgs = {{
     inherit lib;
@@ -454,15 +520,20 @@ let
   render = value:
     let
       modules = ({base_modules_expr}) ++ moduleValues value;
-      eval = lib.evalModules {{
-        inherit modules;
-        specialArgs = {{
-          inherit lib pkgs modulesPath;
-        }};
-      }};
+      nixosSystemOptions = {nixos_system_options_expr};
+      rawOptions =
+        if nixosSystemOptions != null
+        then nixosSystemOptions
+        else (lib.evalModules {{
+          inherit modules;
+          specialArgs = {{
+            inherit lib pkgs modulesPath;
+          }};
+        }}).options;
       docs = nixosOptionsDoc {{
         inherit lib;
-        inherit (eval) options;
+        options = rawOptions;
+        transformOptions = safeDocOption;
         warningsAreErrors = false;
       }};
       options = docs.optionsNix;

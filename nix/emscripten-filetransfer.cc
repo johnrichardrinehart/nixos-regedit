@@ -144,6 +144,15 @@ EM_JS(int, libeval_wasm_fetch,
           };
           const targetInfo = archiveInfo(url);
           const fetchConfig = globalThis.LibevalWasmFetchConfig || {};
+          if (fetchConfig.allowFetch === false) {
+              HEAPU32[outData >> 2] = 0;
+              HEAPU32[outSize >> 2] = 0;
+              HEAPU32[outUrl >> 2] = newUtf8(url);
+              HEAPU32[outEtag >> 2] = 0;
+              HEAPU32[outError >> 2] =
+                  newUtf8("Fetch is disabled by the UI; no browser network request was made.");
+              return -1;
+          }
           const configuredProxy = fetchConfig && fetchConfig.enabled && fetchConfig.proxyUrl;
           const proxyOrigin = value => {
               try {

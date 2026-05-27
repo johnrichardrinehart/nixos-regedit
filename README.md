@@ -4,6 +4,10 @@
 
 Single-page browser for NixOS module options, presented with a Registry Editor-style interface.
 
+Use the published standalone app at:
+
+<https://johnrichardrinehart.github.io/nixos-regedit/>
+
 Build it with:
 
 ```sh
@@ -28,10 +32,12 @@ are allowed when that output has the right shape. The selected output, or an
 arbitrary expression, must evaluate to a NixOS module, a list of NixOS modules,
 or an attribute set whose values are NixOS modules.
 If a bare flake URI has no `#nixosModules.default`, the evaluator falls back to
-`flake.lib.nixosSystem { modules = [ ]; }` when available, then to
-`nixos/modules/module-list.nix` when that file exists. If the default output
-exists but is not a usable module value, evaluation fails instead of falling
-back.
+`flake.lib.nixosSystem` or `flake.inputs.nixpkgs.lib.nixosSystem` when available,
+then to `nixos/modules/module-list.nix` when that file exists. If the default
+output exists, the evaluator renders that module through the same `nixosSystem`
+path when available so NixOS-specific module assumptions work. If the default
+output exists but is not a usable module value, evaluation fails instead of
+falling back.
 
 Example expression:
 
@@ -47,7 +53,7 @@ Fetching is disabled by default. Enable the UI checkbox when a flake reference o
 The backend can use the local `nix` command to fetch ordinary flake sources such
 as GitHub. The standalone page is still subject to browser CORS rules, so remote
 archives that are not CORS-readable from local pages need the backend app or a
-CORS-readable pinned source.
+CORS-readable source with Allow fetch enabled.
 
 The standalone browser UI does not call an HTTP backend. Evaluation is provided
 by libeval-wasm through the app integration exposed as

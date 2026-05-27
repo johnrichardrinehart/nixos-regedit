@@ -86,13 +86,22 @@ class EvaluatorUnitTests(unittest.TestCase):
         self.assertEqual(result["identity"], "github:owner/repo/rev?narHash=sha256-test#foo")
         self.assertEqual(calls[0][-3:], ["metadata", "--json", "github:owner/repo"])
 
-    def test_fetch_disabled_refuses_unpinned_remote_flake_before_nix(self):
+    def test_fetch_disabled_refuses_remote_flake_before_nix(self):
         def runner(command, **kwargs):
-            self.fail("runner should not be called for unlocked remote flakes with fetch disabled")
+            self.fail("runner should not be called for remote flakes with fetch disabled")
 
         with self.assertRaises(EvaluationFailure):
             resolve_payload(
                 {"expression": "github:owner/repo", "allowFetch": False, "system": "x86_64-linux"},
+                runner=runner,
+            )
+        with self.assertRaises(EvaluationFailure):
+            resolve_payload(
+                {
+                    "expression": "github:owner/repo/rev?narHash=sha256-test",
+                    "allowFetch": False,
+                    "system": "x86_64-linux",
+                },
                 runner=runner,
             )
 
@@ -136,6 +145,8 @@ class EvaluatorUnitTests(unittest.TestCase):
         flake_expr = flake_ref_expr("github:owner/repo/rev?narHash=sha256-test", "x86_64-linux")
         self.assertIn("support.lib.nixpkgsLib", flake_expr)
         self.assertIn('[ "nixosModules" "default" ]', flake_expr)
+        self.assertIn("flake.inputs.nixpkgs.lib ? nixosSystem", flake_expr)
+        self.assertIn("modules = modules", flake_expr)
         self.assertNotIn("<nixpkgs>", flake_expr)
 
         selected_expr = flake_ref_expr(

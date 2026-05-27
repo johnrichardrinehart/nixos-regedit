@@ -45,12 +45,10 @@
     };
   }
 
-  function isRemoteUnpinnedFlakeRef(value) {
+  function isRemoteFlakeRef(value) {
     const selected = splitFlakeSelector(value);
     const ref = selected.ref;
-    return (
-      /^[A-Za-z][A-Za-z0-9+.-]*:/.test(ref) && !ref.startsWith("path:") && !ref.includes("narHash=")
-    );
+    return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(ref) && !ref.startsWith("path:");
   }
 
   function flakeSelectorLookupExpression(selector) {
@@ -81,24 +79,22 @@
       selectedFlake && !selectedFlake.explicit
         ? `(let selected = ${selectedDefault}; in
             if selected.found then [ ]
-            else if hasFlake && flake ? lib && flake.lib ? nixosSystem then [ ]
+            else if nixosSystemLib != null then [ ]
             else if builtins.pathExists flakeModuleList then import flakeModuleList
             else throw "Flake does not expose .#nixosModules.default, flake.lib.nixosSystem, or nixos/modules/module-list.nix.")`
         : "[ ]";
-    const nixosSystemOptionsExpression =
-      selectedFlake && !selectedFlake.explicit
-        ? `(let selected = ${selectedDefault}; in
-            if selected.found then null
-            else if hasFlake && flake ? lib && flake.lib ? nixosSystem
-            then (flake.lib.nixosSystem { inherit system; modules = [ ]; }).options
-            else null)`
-        : "null";
+    const nixosSystemOptionsExpression = selectedFlake
+      ? `(if nixosSystemLib != null
+          then (nixosSystemLib.nixosSystem { inherit system; modules = modules; }).options
+          else null)`
+      : "null";
     const moduleSourceExpression = selectedFlake
       ? selectedFlake.explicit
         ? nixString(`flake attribute .#${selectedFlake.selector.join(".")}`)
         : `(let selected = ${selectedDefault}; in
             if selected.found then "flake attribute .#nixosModules.default"
             else if hasFlake && flake ? lib && flake.lib ? nixosSystem then "flake.lib.nixosSystem"
+            else if nixosSystemLib != null then "flake.inputs.nixpkgs.lib.nixosSystem"
             else "nixos/modules/module-list.nix")`
       : nixString("input expression");
     return `
@@ -179,6 +175,16 @@ let
     if hasFlake && flake ? lib && flake.lib ? evalModules
     then flake.lib
     else fallbackLib;
+  nixosSystemLib =
+    if hasFlake && flake ? lib && flake.lib ? nixosSystem
+    then flake.lib
+    else if hasFlake
+      && flake ? inputs
+      && flake.inputs ? nixpkgs
+      && flake.inputs.nixpkgs ? lib
+      && flake.inputs.nixpkgs.lib ? nixosSystem
+    then flake.inputs.nixpkgs.lib
+    else null;
   fallbackPkgs = {
     inherit lib;
     stdenv = { hostPlatform = { inherit system; }; };
@@ -394,6 +400,9 @@ in {
       resolve: async (request) => {
         const input = String(request.expression || "").trim();
         const isFlakeRef = looksLikeFlakeRef(input);
+        if (!request.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
+          return failure("Fetch is disabled. Enable Allow fetch to use remote flake references.");
+        }
         return {
           ok: true,
           kind: isFlakeRef ? "flake" : "expression",
@@ -403,13 +412,14 @@ in {
       },
       evaluate: async (request) => {
         const system = request.system || currentSystemRaw();
-        window.LibevalWasmFetchConfig = request.fetchProxy || null;
+        window.LibevalWasmFetchConfig = {
+          ...(request.fetchProxy || {}),
+          allowFetch: Boolean(request.allowFetch),
+        };
         const input = String(request.expression || "").trim();
         const isFlakeRef = looksLikeFlakeRef(input);
-        if (!request.allowFetch && isFlakeRef && isRemoteUnpinnedFlakeRef(input)) {
-          return failure(
-            "Fetch is disabled. Enable Allow fetch or provide a pinned flake URI with narHash.",
-          );
+        if (!request.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
+          return failure("Fetch is disabled. Enable Allow fetch to use remote flake references.");
         }
         const rawResponse = isFlakeRef ? null : await evalNix(request.expression);
         if (rawResponse && looksLikePayload(rawResponse)) return rawResponse;

@@ -135,9 +135,9 @@
           <section>
             <h2>Fetching</h2>
             <p>
-              With Allow fetch unchecked, the evaluator runs offline and unlocked remote flakes are
-              rejected before evaluation. Use a pinned flake URI with <code>narHash</code>, or
-              enable Allow fetch.
+              With Allow fetch unchecked, remote flake references are rejected before evaluation and
+              the standalone fetch layer refuses browser HTTP requests. Local path flakes and
+              expressions that do not fetch can still evaluate.
             </p>
             <p>
               With Allow fetch checked, the evaluator may resolve and fetch remote flakes. If an
@@ -170,7 +170,8 @@
             </p>
             <p>
               If a bare flake URI has no <code>#nixosModules.default</code>, the evaluator falls
-              back to <code>flake.lib.nixosSystem</code>, then
+              back to <code>flake.lib.nixosSystem</code>,
+              <code>flake.inputs.nixpkgs.lib.nixosSystem</code>, then
               <code>nixos/modules/module-list.nix</code>. If the default output exists but cannot be
               evaluated as modules, evaluation fails instead of falling back.
             </p>

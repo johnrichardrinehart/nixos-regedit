@@ -47,14 +47,42 @@ let
     }
   );
 
-  optionsNix = builtins.listToAttrs (
-    map (o: {
-      inherit (o) name;
-      value = removeAttrs o [
+  safeValue =
+    value:
+    let
+      attempted = builtins.tryEval (builtins.deepSeq value value);
+    in
+    # builtins.tryEval reports only success/value, not the thrown message.
+    # Keep a stable placeholder instead of making option rendering fail.
+    if attempted.success then attempted.value else "<unevaluated>";
+
+  optionType = o: if o ? type then safeValue o.type else null;
+
+  isPackageOption =
+    o:
+    let
+      type = optionType o;
+    in
+    type == "package" || (lib.isAttrs type && (type.name or type.description or "") == "package");
+
+  optionValue =
+    o:
+    lib.mapAttrs (_: safeValue) (
+      removeAttrs o [
         "name"
         "visible"
         "internal"
-      ];
+        "default"
+      ]
+    )
+    // lib.optionalAttrs (o ? default) {
+      default = if isPackageOption o then "<unevaluated>" else safeValue o.default;
+    };
+
+  optionsNix = builtins.listToAttrs (
+    map (o: {
+      inherit (o) name;
+      value = optionValue o;
     }) optionsList
   );
 in
