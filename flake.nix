@@ -284,7 +284,6 @@
             version = "0.1.0";
             src = standaloneSource;
             nativeBuildInputs = [
-              pkgs.makeWrapper
               pkgs.python3
             ];
             installPhase = ''
@@ -294,8 +293,24 @@
                 --evaluator-js ${nixBrowserEvaluator}/share/nix-browser-evaluator/nix-browser-evaluator.js \
                 --out $out/share/nixos-regedit/index.html
               mkdir -p $out/bin
-              makeWrapper ${pkgs.coreutils}/bin/printf $out/bin/nixos-regedit \
-                --add-flags "Open $out/share/nixos-regedit/index.html in a browser.\\n"
+              cat > $out/bin/nixos-regedit <<EOF
+              #!${pkgs.runtimeShell}
+              set -eu
+              html="$out/share/nixos-regedit/index.html"
+              if command -v xdg-open >/dev/null 2>&1; then
+                exec xdg-open "\$html"
+              elif command -v open >/dev/null 2>&1; then
+                exec open "\$html"
+              elif command -v brave >/dev/null 2>&1; then
+                exec brave "file://\$html"
+              elif command -v chromium >/dev/null 2>&1; then
+                exec chromium "file://\$html"
+              elif command -v firefox >/dev/null 2>&1; then
+                exec firefox "file://\$html"
+              fi
+              printf '%s\n' "\$html"
+              EOF
+              chmod +x $out/bin/nixos-regedit
               ln -s $out/share/nixos-regedit/index.html $out/index.html
               runHook postInstall
             '';
@@ -323,7 +338,7 @@
         standalone = {
           type = "app";
           program = "${self.packages.${system}.standalone}/bin/nixos-regedit";
-          meta.description = "Show the path to the built standalone NixOS Regedit HTML";
+          meta.description = "Open the built standalone NixOS Regedit HTML";
         };
       });
 
