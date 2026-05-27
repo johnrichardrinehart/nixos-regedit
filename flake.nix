@@ -24,7 +24,6 @@
       fs = nixpkgs.lib.fileset;
       systems = [
         "x86_64-linux"
-        "aarch64-linux"
       ];
       projectFileset = fs.unions [
         ./.clang-format
@@ -314,14 +313,17 @@
         default = {
           type = "app";
           program = "${self.packages.${system}.backend}/bin/nixos-regedit";
+          meta.description = "Run the local Python-backed NixOS Regedit server";
         };
         backend = {
           type = "app";
           program = "${self.packages.${system}.backend}/bin/nixos-regedit";
+          meta.description = "Run the local Python-backed NixOS Regedit server";
         };
         standalone = {
           type = "app";
           program = "${self.packages.${system}.standalone}/bin/nixos-regedit";
+          meta.description = "Show the path to the built standalone NixOS Regedit HTML";
         };
       });
 
