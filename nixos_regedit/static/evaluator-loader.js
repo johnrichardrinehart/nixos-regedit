@@ -306,6 +306,38 @@ in {
     return next;
   }
 
+  function removeTree(module, path) {
+    if (!module.FS) return;
+    let entries;
+    try {
+      entries = module.FS.readdir(path);
+    } catch (_) {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry === "." || entry === "..") continue;
+      const child = `${path}/${entry}`;
+      const stat = module.FS.stat(child);
+      if (module.FS.isDir(stat.mode)) {
+        removeTree(module, child);
+        module.FS.rmdir(child);
+      } else {
+        module.FS.unlink(child);
+      }
+    }
+  }
+
+  async function clearNixFetchCache(module) {
+    removeTree(module, "/persist/cache/nix");
+    mkdirTree(module, "/persist/cache/nix");
+    await syncfs(module, false);
+  }
+
+  function shouldRetryAfterClearingFetchCache(response) {
+    const message = String((response && response.error) || "");
+    return /NAR hash mismatch|got 'sha256-[^']+'|expected 'sha256-[^']+'/i.test(message);
+  }
+
   async function preparePersistentStorage(module) {
     if (!module.FS) return { enabled: false, reason: "Emscripten FS is unavailable" };
 
@@ -385,7 +417,197 @@ in {
     };
   }
 
+  function workerSource(evaluatorSource) {
+    return `
+const evaluatorSource = ${JSON.stringify(evaluatorSource)};
+const FLAKE_REF_RE = ${FLAKE_REF_RE.toString()};
+${nixString.toString()}
+${looksLikePayload.toString()}
+${failure.toString()}
+${looksLikeFlakeRef.toString()}
+${splitFlakeSelector.toString()}
+${isRemoteFlakeRef.toString()}
+${flakeSelectorLookupExpression.toString()}
+${flakeSelectorExpression.toString()}
+${browserModuleExpression.toString()}
+${mkdirTree.toString()}
+${syncfs.toString()}
+${removeTree.toString()}
+${clearNixFetchCache.toString()}
+${shouldRetryAfterClearingFetchCache.toString()}
+${preparePersistentStorage.toString()}
+
+let modulePromise = null;
+let evaluateRaw = null;
+let currentSystemRaw = null;
+let storage = null;
+
+async function moduleInstance() {
+  if (!modulePromise) {
+    modulePromise = (async () => {
+      (0, eval)(evaluatorSource);
+      if (typeof createLibevalWasm !== "function") {
+        throw new Error("libeval-wasm did not expose createLibevalWasm.");
+      }
+      const module = await createLibevalWasm();
+      storage = await preparePersistentStorage(module);
+      evaluateRaw = module.cwrap("libeval_wasm", "string", ["string"]);
+      currentSystemRaw = module.cwrap("libeval_wasm_current_system", "string", []);
+      return module;
+    })();
+  }
+  return modulePromise;
+}
+
+async function evalNix(expression) {
+  const module = await moduleInstance();
+  const response = JSON.parse(evaluateRaw(expression));
+  await syncfs(module, false);
+  return response;
+}
+
+async function evalNixRetryingFetchCacheMismatch(expression) {
+  const response = await evalNix(expression);
+  if (!response || response.ok !== false || !shouldRetryAfterClearingFetchCache(response)) {
+    return response;
+  }
+  const module = await moduleInstance();
+  await clearNixFetchCache(module);
+  const retried = await evalNix(expression);
+  if (retried && retried.ok === false) return retried;
+  return {
+    ...retried,
+    diagnostics: [
+      "Cleared stale browser Nix fetch cache after a NAR hash mismatch, then retried successfully.",
+      ...((retried && retried.diagnostics) || []),
+    ],
+  };
+}
+
+async function currentSystem() {
+  await moduleInstance();
+  return currentSystemRaw();
+}
+
+async function resolve(request) {
+  const input = String(request.expression || "").trim();
+  const isFlakeRef = looksLikeFlakeRef(input);
+  if (!request.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
+    return failure("Fetch is disabled. Enable Allow fetch to use remote flake references.");
+  }
+  return {
+    ok: true,
+    kind: isFlakeRef ? "flake" : "expression",
+    identity: input,
+    system: request.system || await currentSystem(),
+  };
+}
+
+async function evaluate(request) {
+  const system = request.system || await currentSystem();
+  self.LibevalWasmFetchConfig = {
+    ...(request.fetchProxy || {}),
+    allowFetch: Boolean(request.allowFetch),
+  };
+  const input = String(request.expression || "").trim();
+  const isFlakeRef = looksLikeFlakeRef(input);
+  if (!request.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
+    return failure("Fetch is disabled. Enable Allow fetch to use remote flake references.");
+  }
+  const rawResponse = isFlakeRef ? null : await evalNixRetryingFetchCacheMismatch(request.expression);
+  if (rawResponse && looksLikePayload(rawResponse)) return rawResponse;
+  const wrappedResponse = await evalNixRetryingFetchCacheMismatch(
+    browserModuleExpression(request.expression, system),
+  );
+  if (wrappedResponse && wrappedResponse.ok === false) return wrappedResponse;
+  if (looksLikePayload(wrappedResponse)) return wrappedResponse;
+  if (rawResponse && rawResponse.ok === false) return rawResponse;
+  return failure(
+    "libeval-wasm ran the Nix expression, but it did not return a NixOS module, module list, nixosModules attrset, or NixOS Regedit payload.",
+  );
+}
+
+self.addEventListener("message", async (event) => {
+  const { id, method, request } = event.data || {};
+  try {
+    let value;
+    if (method === "init") {
+      await moduleInstance();
+      value = { storage };
+    } else if (method === "currentSystem") {
+      value = await currentSystem();
+    } else if (method === "resolve") {
+      value = await resolve(request || {});
+    } else if (method === "evaluate") {
+      value = await evaluate(request || {});
+    } else {
+      throw new Error("Unknown evaluator worker method: " + method);
+    }
+    self.postMessage({ id, ok: true, value });
+  } catch (error) {
+    self.postMessage({
+      id,
+      ok: false,
+      error: error && error.message ? error.message : String(error),
+    });
+  }
+});
+`;
+  }
+
+  async function loadWorkerEvaluator(evaluatorSource) {
+    if (typeof Worker !== "function" || typeof Blob !== "function" || typeof URL !== "function") {
+      return false;
+    }
+
+    const url = URL.createObjectURL(
+      new Blob([workerSource(evaluatorSource)], { type: "text/javascript" }),
+    );
+    const worker = new Worker(url, { name: "nixos-regedit-libeval-wasm" });
+    let nextId = 0;
+    const pending = new Map();
+
+    worker.addEventListener("message", (event) => {
+      const { id, ok, value, error } = event.data || {};
+      const deferred = pending.get(id);
+      if (!deferred) return;
+      pending.delete(id);
+      if (ok) deferred.resolve(value);
+      else deferred.reject(new Error(error || "Evaluator worker failed."));
+    });
+
+    const failPending = (error) => {
+      const detail = error && error.message ? error.message : String(error);
+      for (const deferred of pending.values()) deferred.reject(new Error(detail));
+      pending.clear();
+    };
+    worker.addEventListener("error", failPending);
+    worker.addEventListener("messageerror", failPending);
+
+    const call = (method, request) =>
+      new Promise((resolve, reject) => {
+        const id = ++nextId;
+        pending.set(id, { resolve, reject });
+        worker.postMessage({ id, method, request });
+      });
+
+    const initialized = await call("init");
+    window.NixOSRegeditEvaluator = {
+      storage: initialized.storage,
+      currentSystem: async () => call("currentSystem"),
+      resolve: async (request) => call("resolve", request),
+      evaluate: async (request) => call("evaluate", request),
+    };
+    window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-ready"));
+    return true;
+  }
+
   async function loadEvaluator() {
+    if (window.NixOSRegeditStandaloneEvaluatorSource) {
+      const loaded = await loadWorkerEvaluator(window.NixOSRegeditStandaloneEvaluatorSource);
+      if (loaded) return true;
+    }
+
     const createEvaluator = window.createLibevalWasm;
     if (typeof createEvaluator !== "function") return false;
     const module = await createEvaluator();
@@ -396,6 +618,22 @@ in {
       const response = JSON.parse(evaluateRaw(expression));
       await syncfs(module, false);
       return response;
+    };
+    const evalNixRetryingFetchCacheMismatch = async (expression) => {
+      const response = await evalNix(expression);
+      if (!response || response.ok !== false || !shouldRetryAfterClearingFetchCache(response)) {
+        return response;
+      }
+      await clearNixFetchCache(module);
+      const retried = await evalNix(expression);
+      if (retried && retried.ok === false) return retried;
+      return {
+        ...retried,
+        diagnostics: [
+          "Cleared stale browser Nix fetch cache after a NAR hash mismatch, then retried successfully.",
+          ...((retried && retried.diagnostics) || []),
+        ],
+      };
     };
     window.NixOSRegeditEvaluator = {
       storage,
@@ -424,9 +662,13 @@ in {
         if (!request.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
           return failure("Fetch is disabled. Enable Allow fetch to use remote flake references.");
         }
-        const rawResponse = isFlakeRef ? null : await evalNix(request.expression);
+        const rawResponse = isFlakeRef
+          ? null
+          : await evalNixRetryingFetchCacheMismatch(request.expression);
         if (rawResponse && looksLikePayload(rawResponse)) return rawResponse;
-        const wrappedResponse = await evalNix(browserModuleExpression(request.expression, system));
+        const wrappedResponse = await evalNixRetryingFetchCacheMismatch(
+          browserModuleExpression(request.expression, system),
+        );
         if (wrappedResponse && wrappedResponse.ok === false) return wrappedResponse;
         if (looksLikePayload(wrappedResponse)) return wrappedResponse;
         if (rawResponse && rawResponse.ok === false) return rawResponse;

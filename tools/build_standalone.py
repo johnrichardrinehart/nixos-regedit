@@ -33,6 +33,22 @@ def inline_script(source: str, source_name: str) -> str:
 </script>"""
 
 
+def inline_evaluator_source(source: str) -> str:
+    # Keep libeval-wasm off the main thread. The loader consumes this source
+    # string inside a Worker so expensive Nix evaluation does not freeze the UI.
+    encoded = base64.b64encode(source.encode("utf-8")).decode("ascii")
+    return f"""<script>
+(() => {{
+  const encoded = "{encoded}";
+  const binary = atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  window.NixOSRegeditStandaloneEvaluatorSource =
+    new TextDecoder().decode(bytes) + "\\n//# sourceURL=libeval-wasm.js";
+}})();
+</script>"""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--static-dir", required=True, type=Path)
@@ -63,7 +79,7 @@ def main() -> int:
         html = inline_asset(
             html,
             r'<script\s+src="libeval-wasm\.js"></script>',
-            inline_script(evaluator_js, "libeval-wasm.js"),
+            inline_evaluator_source(evaluator_js),
         )
     html = inline_asset(
         html,

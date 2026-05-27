@@ -54,11 +54,19 @@ class StaticBundleTests(unittest.TestCase):
         self.assertNotIn("provide a pinned flake URI", loader)
         self.assertIn("Fetch is disabled. Enable Allow fetch", loader)
         self.assertGreaterEqual(loader.count("isRemoteFlakeRef(input)"), 2)
-        self.assertIn("const rawResponse = isFlakeRef ? null", loader)
+        self.assertIn("const rawResponse = isFlakeRef", loader)
         self.assertIn("module.ENV.NIX_CONFIG", loader)
         self.assertIn("tarball-ttl = 900", loader)
+        self.assertIn("clearNixFetchCache", loader)
+        self.assertIn("shouldRetryAfterClearingFetchCache", loader)
+        self.assertIn("NAR hash mismatch", loader)
+        self.assertIn("loadWorkerEvaluator", loader)
+        self.assertIn("NixOSRegeditStandaloneEvaluatorSource", loader)
+        self.assertIn("new Worker", loader)
         wasm_source = Path("src/libeval-wasm.cc").read_text()
         self.assertNotIn('nix_setting_set(ctx.ptr, "tarball-ttl"', wasm_source)
+        self.assertIn("processSha256Block", wasm_source)
+        self.assertNotIn("std::memset(md, 0, 32)", wasm_source)
         styles = Path("nixos_regedit/static/styles.css").read_text()
         self.assertIn(".diagnostic-red", styles)
         self.assertIn(".diagnostic-magenta", styles)
@@ -88,10 +96,14 @@ class StaticBundleTests(unittest.TestCase):
     def test_standalone_builder_inlines_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp, "index.html")
+            evaluator = Path(tmp, "libeval-wasm.js")
+            evaluator.write_text("globalThis.createLibevalWasm = function () {};", encoding="utf-8")
             argv = [
                 "build_standalone.py",
                 "--static-dir",
                 "nixos_regedit/static",
+                "--evaluator-js",
+                str(evaluator),
                 "--out",
                 str(out),
             ]
@@ -100,6 +112,7 @@ class StaticBundleTests(unittest.TestCase):
             html = out.read_text()
             self.assertIn("<style>", html)
             self.assertIn("<script>", html)
+            self.assertIn("NixOSRegeditStandaloneEvaluatorSource", html)
             self.assertNotIn('src="app.js"', html)
             self.assertNotIn('href="styles.css"', html)
             self.assertNotIn('src="evaluator-loader.js"', html)
