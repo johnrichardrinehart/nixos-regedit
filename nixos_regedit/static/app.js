@@ -7,7 +7,10 @@ const state = {
   evaluatedExpression: null,
   declarationCopyIndex: 0,
   lastMode: "",
+  lastModuleSource: "",
   lastOptionCount: 0,
+  lastEvaluationInput: null,
+  evaluationInFlight: null,
   filterText: "",
   selectionExplicit: false,
 };
@@ -22,6 +25,8 @@ const elements = {
   expression: $("expressionInput"),
   evaluatedRow: $("evaluatedRow"),
   evaluatedExpression: $("evaluatedExpression"),
+  moduleSourceRow: $("moduleSourceRow"),
+  moduleSource: $("moduleSource"),
   filter: $("filterInput"),
   allowFetch: $("allowFetch"),
   system: $("systemInput"),
@@ -47,12 +52,10 @@ let pendingUrlOption = null;
 let pendingUrlExpanded = null;
 let filterTimer = null;
 let evaluatorAvailable = false;
-let evaluatorLoadSettled = Boolean(
-  window.NixOSRegeditEvaluator || window.NixOSRegeditWasmEvaluator,
-);
+let evaluatorLoadSettled = Boolean(window.NixOSRegeditEvaluator);
 
 function regeditEvaluator() {
-  const evaluator = window.NixOSRegeditEvaluator || window.NixOSRegeditWasmEvaluator || null;
+  const evaluator = window.NixOSRegeditEvaluator || null;
   if (
     !evaluator ||
     typeof evaluator.resolve !== "function" ||
@@ -66,7 +69,7 @@ function regeditEvaluator() {
 }
 
 function refreshEvaluatorAvailability() {
-  const evaluator = window.NixOSRegeditEvaluator || window.NixOSRegeditWasmEvaluator || null;
+  const evaluator = window.NixOSRegeditEvaluator || null;
   evaluatorAvailable = Boolean(
     evaluator &&
     typeof evaluator.resolve === "function" &&
@@ -81,7 +84,7 @@ function refreshEvaluatorAvailability() {
     setStatus("Evaluator unavailable");
     showDiagnostics([
       "No evaluator is available in this build.",
-      "Load a browser evaluator or run the Python backend app before evaluating.",
+      "Load libeval-wasm or run the Python backend app before evaluating.",
     ]);
   } else {
     setStatus("Loading evaluator");
@@ -187,6 +190,22 @@ function renderEvaluatedExpression() {
   elements.evaluatedExpression.textContent = show ? evaluated : "";
 }
 
+function moduleSourceLabel(mode) {
+  if (mode === "flake-nixosModules") return "flake attribute";
+  if (mode === "flake-nixosSystem") return "flake.lib.nixosSystem";
+  if (mode === "flake-module-list") return "nixos/modules/module-list.nix";
+  if (mode === "expression-nixosModules" || mode === "browser-nixosModules") {
+    return "input expression";
+  }
+  return mode || "";
+}
+
+function renderModuleSource() {
+  const source = state.lastModuleSource || "";
+  elements.moduleSourceRow.hidden = !source;
+  elements.moduleSource.textContent = source;
+}
+
 function expandPath(path) {
   state.expanded.add("");
   const parts = path.split(".").filter(Boolean);
@@ -208,6 +227,51 @@ function selectOptionKey(optionKey, { expand = true, explicit = false } = {}) {
 
 function setStatus(message) {
   elements.status.textContent = message;
+}
+
+function currentEvaluationInput() {
+  return {
+    expression: elements.expression.value.trim(),
+    system: elements.system.value.trim(),
+    allowFetch: elements.allowFetch.checked,
+  };
+}
+
+function sameEvaluationInput(left, right) {
+  return Boolean(
+    left &&
+    right &&
+    left.expression === right.expression &&
+    left.system === right.system &&
+    left.allowFetch === right.allowFetch,
+  );
+}
+
+function expressionSummary(input) {
+  const text = String((input && input.expression) || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "expression";
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+}
+
+function hasVisibleResults() {
+  return Object.keys(state.options).length > 0;
+}
+
+function markInputChanged() {
+  const input = currentEvaluationInput();
+  if (state.evaluationInFlight) {
+    if (sameEvaluationInput(input, state.evaluationInFlight)) {
+      setStatus(`Still evaluating ${expressionSummary(input)}`);
+    } else {
+      setStatus("Input changed while evaluating; visible results are not updated yet");
+    }
+    return;
+  }
+  if (hasVisibleResults() && !sameEvaluationInput(input, state.lastEvaluationInput)) {
+    setStatus("Input changed; visible results are from the previous evaluation");
+  }
 }
 
 function appendDiagnosticText(parent, text, classes) {
@@ -329,7 +393,9 @@ function resetResults() {
   state.selectedOptionKey = null;
   state.selectionExplicit = false;
   state.lastMode = "";
+  state.lastModuleSource = "";
   state.lastOptionCount = 0;
+  state.lastEvaluationInput = null;
   elements.content.hidden = true;
   elements.tableRegion.hidden = true;
   elements.rows.replaceChildren();
@@ -337,6 +403,7 @@ function resetResults() {
   elements.details.textContent = "";
   elements.count.textContent = "0 options";
   renderEvaluatedExpression();
+  renderModuleSource();
 }
 
 function requestFailureMessage(error) {
@@ -709,11 +776,13 @@ function renderAll() {
   renderDetails();
 }
 
-function renderEvaluation(payload, { cached = false } = {}) {
+function renderEvaluation(payload, { cached = false, input = currentEvaluationInput() } = {}) {
   state.options = payload.options || {};
   state.tree = payload.tree || buildTreeFromOptions(state.options);
   state.lastMode = payload.mode || "";
+  state.lastModuleSource = payload.moduleSource || moduleSourceLabel(payload.mode);
   state.lastOptionCount = payload.optionCount || Object.keys(state.options).length;
+  state.lastEvaluationInput = input;
   if (pendingUrlExpanded === "all") {
     const paths = [];
     collectPaths(state.tree, paths);
@@ -735,8 +804,11 @@ function renderEvaluation(payload, { cached = false } = {}) {
   renderAll();
   showDiagnostics([]);
   renderEvaluatedExpression();
+  renderModuleSource();
   const parts = filterParts();
-  if (parts.length > 0) {
+  if (!sameEvaluationInput(currentEvaluationInput(), input)) {
+    setStatus("Evaluation finished; input changed since these results were produced");
+  } else if (parts.length > 0) {
     setStatus(`${filteredEntries(parts).length} matching options${cached ? " (cached)" : ""}`);
   } else {
     setStatus(`${payload.mode}: ${payload.optionCount} options${cached ? " (cached)" : ""}`);
@@ -746,9 +818,18 @@ function renderEvaluation(payload, { cached = false } = {}) {
 
 async function evaluate() {
   if (!refreshEvaluatorAvailability()) return;
-  const expression = elements.expression.value.trim();
-  const system = elements.system.value.trim();
-  const allowFetch = elements.allowFetch.checked;
+  const input = currentEvaluationInput();
+  const expression = input.expression;
+  const system = input.system;
+  const allowFetch = input.allowFetch;
+  if (state.evaluationInFlight) {
+    if (sameEvaluationInput(input, state.evaluationInFlight)) {
+      setStatus(`Already evaluating ${expressionSummary(input)}`);
+    } else {
+      setStatus("Still evaluating previous input; changed input has not been evaluated");
+    }
+    return;
+  }
   const evaluationExpression =
     !allowFetch && state.evaluatedExpression ? state.evaluatedExpression : expression;
   if (!expression) {
@@ -757,8 +838,15 @@ async function evaluate() {
     setStatus("Missing expression");
     return;
   }
+  state.evaluationInFlight = input;
   elements.evaluate.disabled = true;
-  setStatus("Evaluating");
+  if (hasVisibleResults() && !sameEvaluationInput(input, state.lastEvaluationInput)) {
+    setStatus(
+      `Evaluating changed input; previous results still shown: ${expressionSummary(input)}`,
+    );
+  } else {
+    setStatus(`Evaluating ${expressionSummary(input)}`);
+  }
   showDiagnostics([]);
   try {
     const cacheIdentity = await cacheIdentityFor(evaluationExpression, allowFetch, system);
@@ -768,7 +856,7 @@ async function evaluate() {
     if (cacheKey) {
       const cached = await cacheGet(cacheKey);
       if (cached) {
-        renderEvaluation(cached, { cached: true });
+        renderEvaluation(cached, { cached: true, input });
         return;
       }
     }
@@ -788,12 +876,13 @@ async function evaluate() {
       return;
     }
     if (cacheKey) await cachePut(cacheKey, payload);
-    renderEvaluation(payload);
+    renderEvaluation(payload, { input });
   } catch (error) {
     resetResults();
     showDiagnostics([requestFailureMessage(error)]);
-    setStatus("Ready");
+    setStatus("Evaluation failed");
   } finally {
+    state.evaluationInFlight = null;
     elements.evaluate.disabled = false;
   }
 }
@@ -877,6 +966,7 @@ elements.expression.addEventListener("input", () => {
   state.selectedOptionKey = null;
   state.evaluatedExpression = null;
   renderEvaluatedExpression();
+  markInputChanged();
   updateUrlState();
 });
 elements.filter.addEventListener("input", scheduleFilter);
@@ -889,9 +979,11 @@ elements.filter.addEventListener("keydown", (event) => {
 elements.system.addEventListener("input", () => {
   state.evaluatedExpression = null;
   renderEvaluatedExpression();
+  markInputChanged();
   updateUrlState();
 });
 elements.allowFetch.addEventListener("change", () => {
+  markInputChanged();
   updateUrlState();
 });
 elements.expand.addEventListener("click", () => {

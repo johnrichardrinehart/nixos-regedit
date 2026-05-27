@@ -54,7 +54,7 @@ def main() -> int:
     )
     if evaluator_js is None:
         html = re.sub(
-            r'\s*<script\s+src="nix-browser-evaluator\.js"></script>',
+            r'\s*<script\s+src="libeval-wasm\.js"></script>',
             "",
             html,
             count=1,
@@ -62,8 +62,8 @@ def main() -> int:
     else:
         html = inline_asset(
             html,
-            r'<script\s+src="nix-browser-evaluator\.js"></script>',
-            inline_script(evaluator_js, "nix-browser-evaluator.js"),
+            r'<script\s+src="libeval-wasm\.js"></script>',
+            inline_script(evaluator_js, "libeval-wasm.js"),
         )
     html = inline_asset(
         html,

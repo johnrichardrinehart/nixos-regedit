@@ -23,14 +23,15 @@ Evaluator = Callable[[dict[str, Any]], dict[str, Any]]
 
 def backend_index(static_dir: Path = STATIC_DIR) -> bytes:
     html = static_dir.joinpath("index.html").read_text(encoding="utf-8")
-    html = html.replace('    <script src="nix-browser-evaluator.js"></script>\n', "")
+    html = html.replace('    <script src="libeval-wasm.js"></script>\n', "")
     html = html.replace(
         '    <script src="evaluator-loader.js"></script>',
         '    <script src="backend-loader.js"></script>',
     )
     html = html.replace(
         "The standalone page does not use an HTTP backend. Evaluation requires a compatible\n"
-        "              browser evaluator embedded as <code>window.NixOSRegeditEvaluator</code>.",
+        "              libeval-wasm integration embedded as\n"
+        "              <code>window.NixOSRegeditEvaluator</code>.",
         "This server uses the local Python backend and the system <code>nix</code> command for\n"
         "              evaluation.",
     )

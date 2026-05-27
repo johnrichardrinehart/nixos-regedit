@@ -34,6 +34,10 @@ SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 CURRENT_SYSTEM_EXPR = "builtins.currentSystem"
 SELF_FLAKE_ENV_VAR = "NIXOS_REGEDIT_FLAKE_REF"
 REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_FLAKE_SELECTOR = "nixosModules.default"
+MISSING_DEFAULT_SELECTOR_MARKER = "__NIXOS_REGEDIT_MISSING_DEFAULT_SELECTOR__"
+MISSING_NIXOS_SYSTEM_MARKER = "__NIXOS_REGEDIT_MISSING_NIXOS_SYSTEM__"
+MISSING_MODULE_LIST_MARKER = "__NIXOS_REGEDIT_MISSING_MODULE_LIST__"
 
 
 def self_flake_ref() -> str:
@@ -119,18 +123,60 @@ def build_flake_metadata_command(ref: str, allow_fetch: bool) -> list[str]:
     return command
 
 
+def split_flake_selector(ref: str) -> tuple[str, str]:
+    base, separator, selector = ref.strip().partition("#")
+    return base, selector if separator and selector else DEFAULT_FLAKE_SELECTOR
+
+
+def has_explicit_flake_selector(ref: str) -> bool:
+    return "#" in ref.strip()
+
+
+def nix_string_list(values: list[str]) -> str:
+    return "[ " + " ".join(json.dumps(value) for value in values) + " ]"
+
+
+def nix_attrpath(components: list[str]) -> str:
+    return (
+        "(builtins.foldl' (value: name: builtins.getAttr name value) flake "
+        f"{nix_string_list(components)})"
+    )
+
+
+def nix_attrpath_or_throw(components: list[str], marker: str) -> str:
+    path = nix_string_list(components)
+    return f"""
+    let
+      selected = builtins.foldl' (
+        state: name:
+          if state.found && builtins.isAttrs state.value && builtins.hasAttr name state.value
+          then {{ found = true; value = builtins.getAttr name state.value; }}
+          else {{ found = false; value = null; }}
+      ) {{ found = true; value = flake; }} {path};
+    in
+      if selected.found
+      then selected.value
+      else throw {json.dumps(marker)}
+    """
+
+
 def normalize_flake_ref(ref: str, cwd: str) -> str:
-    if SCHEME_RE.match(ref):
-        return ref
-    candidate = ref if os.path.isabs(ref) else os.path.join(cwd, ref)
+    base, selector = split_flake_selector(ref)
+    if SCHEME_RE.match(base):
+        return base if selector == DEFAULT_FLAKE_SELECTOR else f"{base}#{selector}"
+    candidate = base if os.path.isabs(base) else os.path.join(cwd, base)
     if os.path.exists(candidate):
-        return "path:" + os.path.abspath(candidate)
+        normalized = "path:" + os.path.abspath(candidate)
+        return normalized if selector == DEFAULT_FLAKE_SELECTOR else f"{normalized}#{selector}"
     return ref
 
 
 def is_remote_unpinned_flake_ref(ref: str) -> bool:
+    base, _selector = split_flake_selector(ref)
     return (
-        SCHEME_RE.match(ref) is not None and not ref.startswith("path:") and "narHash=" not in ref
+        SCHEME_RE.match(base) is not None
+        and not base.startswith("path:")
+        and "narHash=" not in base
     )
 
 
@@ -183,7 +229,14 @@ def resolve_flake_metadata(
     return metadata, attempt
 
 
-def flake_metadata_identity(metadata: dict[str, Any]) -> str:
+def flake_metadata_identity(
+    metadata: dict[str, Any], selector: str = DEFAULT_FLAKE_SELECTOR
+) -> str:
+    identity = flake_metadata_ref(metadata)
+    return f"{identity}#{selector}"
+
+
+def flake_metadata_ref(metadata: dict[str, Any]) -> str:
     url = metadata.get("url")
     if url:
         return unquote(url)
@@ -211,14 +264,15 @@ def resolve_payload(
             "attempts": [],
         }
 
+    base_ref, selector = split_flake_selector(request.expression)
     metadata, attempt = resolve_flake_metadata(
-        request.expression,
+        base_ref,
         request.allow_fetch,
         runner=runner,
         cwd=cwd,
         timeout=timeout,
     )
-    identity = flake_metadata_identity(metadata)
+    identity = flake_metadata_identity(metadata, selector)
     return {
         "ok": True,
         "kind": "flake",
@@ -229,13 +283,24 @@ def resolve_payload(
     }
 
 
-def flake_ref_expr(ref: str, system: str | None) -> str:
+def flake_ref_expr(
+    ref: str, system: str | None, *, missing_selector_marker: str | None = None
+) -> str:
+    base_ref, selector = split_flake_selector(ref)
+    selector_components = [part for part in selector.split(".") if part]
+    components = selector_components or DEFAULT_FLAKE_SELECTOR.split(".")
+    selected_path = ".".join(components)
+    selector_expr = (
+        nix_attrpath_or_throw(components, missing_selector_marker)
+        if missing_selector_marker
+        else nix_attrpath(components)
+    )
     return _wrap_input(
-        "flake.nixosModules",
+        selector_expr,
         "flake-nixosModules",
         system=system,
         prelude=f"""
-  flake = builtins.getFlake {json.dumps(ref)};
+  flake = builtins.getFlake {json.dumps(base_ref)};
   flakeModulesPath = flake.outPath + "/nixos/modules";
   flakeModuleList = flakeModulesPath + "/module-list.nix";
   flakePkgs =
@@ -243,14 +308,80 @@ def flake_ref_expr(ref: str, system: str | None) -> str:
     then builtins.getAttr selectedSystem flake.legacyPackages
     else fallbackPkgs;
 """,
-        base_modules_expr=(
-            "if builtins.pathExists flakeModuleList then import flakeModuleList else [ ]"
-        ),
         modules_path_expr=(
             'if builtins.pathExists flakeModulesPath then flakeModulesPath else "/nixos/modules"'
         ),
         pkgs_expr="flakePkgs",
+        module_source_expr=json.dumps(f"flake attribute .#{selected_path}"),
     )
+
+
+def flake_module_list_expr(ref: str, system: str | None) -> str:
+    base_ref, _selector = split_flake_selector(ref)
+    return _wrap_input(
+        "[ ]",
+        "flake-module-list",
+        system=system,
+        prelude=f"""
+  flake = builtins.getFlake {json.dumps(base_ref)};
+  flakeModulesPath = flake.outPath + "/nixos/modules";
+  flakeModuleList = flakeModulesPath + "/module-list.nix";
+  flakePkgs =
+    if flake ? legacyPackages && builtins.hasAttr selectedSystem flake.legacyPackages
+    then builtins.getAttr selectedSystem flake.legacyPackages
+    else fallbackPkgs;
+""",
+        base_modules_expr=f"""
+          if builtins.pathExists flakeModuleList
+          then import flakeModuleList
+          else throw {json.dumps(MISSING_MODULE_LIST_MARKER)}
+        """,
+        modules_path_expr=(
+            'if builtins.pathExists flakeModulesPath then flakeModulesPath else "/nixos/modules"'
+        ),
+        pkgs_expr="flakePkgs",
+        module_source_expr=json.dumps("nixos/modules/module-list.nix"),
+    )
+
+
+def flake_nixos_system_expr(ref: str, system: str | None) -> str:
+    base_ref, _selector = split_flake_selector(ref)
+    mode_json = json.dumps("flake-nixosSystem")
+    system_expr = CURRENT_SYSTEM_EXPR if system is None else json.dumps(system)
+    self_ref = json.dumps(self_flake_ref())
+    marker = json.dumps(MISSING_NIXOS_SYSTEM_MARKER)
+    return f"""
+let
+  flake = builtins.getFlake {json.dumps(base_ref)};
+  support = builtins.getFlake {self_ref};
+  selectedSystem = {system_expr};
+  nixosOptionsDoc = support.lib.nixosOptionsDoc;
+  lib =
+    if flake ? lib && flake.lib ? nixosSystem
+    then flake.lib
+    else throw {marker};
+  eval = lib.nixosSystem {{
+    system = selectedSystem;
+    modules = [ ];
+  }};
+  docs = nixosOptionsDoc {{
+    inherit lib;
+    inherit (eval) options;
+    warningsAreErrors = false;
+  }};
+  options = docs.optionsNix;
+in {{
+  ok = true;
+  mode = {mode_json};
+  system = selectedSystem;
+  moduleNames = [ "nixosSystem" ];
+  moduleCount = 0;
+  moduleSource = "flake.lib.nixosSystem";
+  optionCount = builtins.length (builtins.attrNames options);
+  inherit options;
+  diagnostics = [];
+}}
+"""
 
 
 def module_collection_expr(expression: str, system: str | None) -> str:
@@ -270,6 +401,7 @@ def _wrap_input(
     base_modules_expr: str = "[ ]",
     modules_path_expr: str = '"/nixos/modules"',
     pkgs_expr: str = "fallbackPkgs",
+    module_source_expr: str = json.dumps("input expression"),
 ) -> str:
     mode_json = json.dumps(mode)
     system_expr = CURRENT_SYSTEM_EXPR if system is None else json.dumps(system)
@@ -338,6 +470,7 @@ let
       ok = true;
       mode = {mode_json};
       system = selectedSystem;
+      moduleSource = {module_source_expr};
       moduleNames = moduleNames value;
       moduleCount = builtins.length modules;
       optionCount = builtins.length (builtins.attrNames options);
@@ -362,31 +495,11 @@ def evaluate(
     candidates: list[tuple[str, str]] = []
     attempts: list[dict[str, Any]] = []
 
-    if looks_like_flake_ref(request.expression):
-        try:
-            metadata, attempt = resolve_flake_metadata(
-                request.expression,
-                request.allow_fetch,
-                runner=runner,
-                cwd=cwd,
-                timeout=timeout,
-            )
-            attempts.append(attempt)
-            candidates.append(
-                (
-                    "flake-nixosModules",
-                    flake_ref_expr(flake_metadata_identity(metadata), request.system),
-                )
-            )
-        except EvaluationFailure as exc:
-            attempts.extend(exc.attempts)
-    candidates.append(
-        ("expression-nixosModules", module_collection_expr(request.expression, request.system))
-    )
-
-    for mode, nix_expr in candidates:
+    def run_candidate(
+        mode: str, nix_expr: str
+    ) -> tuple[dict[str, Any], subprocess.CompletedProcess[str]]:
+        command = build_command(nix_expr, request.allow_fetch)
         if runner_provided:
-            command = build_command(nix_expr, request.allow_fetch)
             completed = runner(
                 command,
                 cwd=cwd,
@@ -395,7 +508,6 @@ def evaluate(
                 timeout=timeout,
             )
         else:
-            command = build_command(nix_expr, request.allow_fetch)
             completed = run_eval(
                 nix_expr, allow_fetch=request.allow_fetch, cwd=cwd, timeout=timeout
             )
@@ -405,15 +517,19 @@ def evaluate(
             "returncode": completed.returncode,
             "stderr": completed.stderr[-6000:],
         }
-        attempts.append(attempt)
+        return attempt, completed
+
+    def result_from_completed(
+        mode: str, attempt: dict[str, Any], completed: subprocess.CompletedProcess[str]
+    ) -> dict[str, Any] | None:
         if completed.returncode != 0:
-            continue
+            return None
         try:
             result = json.loads(completed.stdout)
         except json.JSONDecodeError as exc:
             attempt["stdout"] = completed.stdout[-2000:]
             attempt["jsonError"] = str(exc)
-            continue
+            return None
         result.setdefault("mode", mode)
         result.setdefault("diagnostics", [])
         result["diagnostics"].append(
@@ -425,9 +541,97 @@ def evaluate(
         result["attempts"] = attempts
         return result
 
+    if looks_like_flake_ref(request.expression):
+        base_ref, selector = split_flake_selector(request.expression)
+        try:
+            metadata, attempt = resolve_flake_metadata(
+                base_ref,
+                request.allow_fetch,
+                runner=runner,
+                cwd=cwd,
+                timeout=timeout,
+            )
+        except EvaluationFailure as exc:
+            attempts.extend(exc.attempts)
+        else:
+            attempts.append(attempt)
+            resolved_ref = flake_metadata_ref(metadata)
+            if has_explicit_flake_selector(request.expression):
+                mode = "flake-nixosModules"
+                nix_expr = flake_ref_expr(f"{resolved_ref}#{selector}", request.system)
+                attempt, completed = run_candidate(mode, nix_expr)
+                attempts.append(attempt)
+                result = result_from_completed(mode, attempt, completed)
+                if result is not None:
+                    return result
+                raise EvaluationFailure(
+                    "Could not evaluate the selected flake output as NixOS modules.",
+                    attempts,
+                )
+
+            mode = "flake-nixosModules"
+            nix_expr = flake_ref_expr(
+                f"{resolved_ref}#{DEFAULT_FLAKE_SELECTOR}",
+                request.system,
+                missing_selector_marker=MISSING_DEFAULT_SELECTOR_MARKER,
+            )
+            attempt, completed = run_candidate(mode, nix_expr)
+            attempts.append(attempt)
+            result = result_from_completed(mode, attempt, completed)
+            if result is not None:
+                return result
+            if MISSING_DEFAULT_SELECTOR_MARKER not in attempt["stderr"]:
+                raise EvaluationFailure(
+                    "Could not evaluate .#nixosModules.default as NixOS modules.",
+                    attempts,
+                )
+
+            mode = "flake-nixosSystem"
+            nix_expr = flake_nixos_system_expr(resolved_ref, request.system)
+            attempt, completed = run_candidate(mode, nix_expr)
+            attempts.append(attempt)
+            result = result_from_completed(mode, attempt, completed)
+            if result is not None:
+                return result
+            if MISSING_NIXOS_SYSTEM_MARKER not in attempt["stderr"]:
+                raise EvaluationFailure(
+                    "Flake does not expose .#nixosModules.default, and flake.lib.nixosSystem "
+                    "could not evaluate its default NixOS modules.",
+                    attempts,
+                )
+
+            mode = "flake-module-list"
+            nix_expr = flake_module_list_expr(resolved_ref, request.system)
+            attempt, completed = run_candidate(mode, nix_expr)
+            attempts.append(attempt)
+            result = result_from_completed(mode, attempt, completed)
+            if result is not None:
+                return result
+            if MISSING_MODULE_LIST_MARKER in attempt["stderr"]:
+                raise EvaluationFailure(
+                    "Flake does not expose .#nixosModules.default, flake.lib.nixosSystem, "
+                    "or nixos/modules/module-list.nix.",
+                    attempts,
+                )
+            raise EvaluationFailure(
+                "Flake .#nixosModules.default and flake.lib.nixosSystem are missing, and "
+                "nixos/modules/module-list.nix could not be evaluated as NixOS modules.",
+                attempts,
+            )
+    candidates.append(
+        ("expression-nixosModules", module_collection_expr(request.expression, request.system))
+    )
+
+    for mode, nix_expr in candidates:
+        attempt, completed = run_candidate(mode, nix_expr)
+        attempts.append(attempt)
+        result = result_from_completed(mode, attempt, completed)
+        if result is not None:
+            return result
+
     message = (
-        "Could not evaluate expression as a flake .#nixosModules output or a "
-        "nixosModules-shaped expression."
+        "Could not evaluate expression as a flake output containing NixOS modules or a "
+        "nixosModules-shaped expression. Bare flake URIs default to #nixosModules.default."
     )
     raise EvaluationFailure(message, attempts)
 

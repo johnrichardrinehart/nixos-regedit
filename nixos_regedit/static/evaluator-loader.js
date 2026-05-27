@@ -26,13 +26,76 @@
     return FLAKE_REF_RE.test(stripped);
   }
 
+  function splitFlakeSelector(value) {
+    const stripped = String(value || "").trim();
+    const index = stripped.indexOf("#");
+    if (index < 0) {
+      return { explicit: false, ref: stripped, selector: ["nixosModules", "default"] };
+    }
+    const selector = stripped
+      .slice(index + 1)
+      .split(".")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    return {
+      explicit: true,
+      ref: stripped.slice(0, index),
+      selector: selector.length ? selector : ["nixosModules", "default"],
+    };
+  }
+
+  function flakeSelectorLookupExpression(selector) {
+    const nixList = `[ ${selector.map((part) => nixString(part)).join(" ")} ]`;
+    return `(builtins.foldl' (
+      state: name:
+        if state.found && builtins.isAttrs state.value && builtins.hasAttr name state.value
+        then { found = true; value = builtins.getAttr name state.value; }
+        else { found = false; value = null; }
+    ) { found = true; value = flake; } ${nixList})`;
+  }
+
+  function flakeSelectorExpression(selector) {
+    const selected = flakeSelectorLookupExpression(selector);
+    return `(let selected = ${selected}; in if selected.found then selected.value else throw "Selected flake output does not exist.")`;
+  }
+
   function browserModuleExpression(expression, system) {
     const flakeRef = looksLikeFlakeRef(expression) ? String(expression || "").trim() : null;
-    const inputExpression = flakeRef ? "flake.nixosModules" : `(${expression})`;
+    const selectedFlake = flakeRef ? splitFlakeSelector(flakeRef) : null;
+    const selectedDefault = flakeSelectorLookupExpression(["nixosModules", "default"]);
+    const inputExpression = selectedFlake
+      ? selectedFlake.explicit
+        ? flakeSelectorExpression(selectedFlake.selector)
+        : `(let selected = ${selectedDefault}; in if selected.found then selected.value else [ ])`
+      : `(${expression})`;
+    const baseModulesExpression =
+      selectedFlake && !selectedFlake.explicit
+        ? `(let selected = ${selectedDefault}; in
+            if selected.found then [ ]
+            else if hasFlake && flake ? lib && flake.lib ? nixosSystem then [ ]
+            else if builtins.pathExists flakeModuleList then import flakeModuleList
+            else throw "Flake does not expose .#nixosModules.default, flake.lib.nixosSystem, or nixos/modules/module-list.nix.")`
+        : "[ ]";
+    const nixosSystemOptionsExpression =
+      selectedFlake && !selectedFlake.explicit
+        ? `(let selected = ${selectedDefault}; in
+            if selected.found then null
+            else if hasFlake && flake ? lib && flake.lib ? nixosSystem
+            then (flake.lib.nixosSystem { inherit system; modules = [ ]; }).options
+            else null)`
+        : "null";
+    const moduleSourceExpression = selectedFlake
+      ? selectedFlake.explicit
+        ? nixString(`flake attribute .#${selectedFlake.selector.join(".")}`)
+        : `(let selected = ${selectedDefault}; in
+            if selected.found then "flake attribute .#nixosModules.default"
+            else if hasFlake && flake ? lib && flake.lib ? nixosSystem then "flake.lib.nixosSystem"
+            else "nixos/modules/module-list.nix")`
+      : nixString("input expression");
     return `
 let
   system = ${system ? nixString(system) : "builtins.currentSystem"};
-  flake = ${flakeRef ? `builtins.getFlake ${nixString(flakeRef)}` : "null"};
+  flake = ${selectedFlake ? `builtins.getFlake ${nixString(selectedFlake.ref)}` : "null"};
   hasFlake = flake != null;
   concatStringsSep = sep: list:
     builtins.concatStringsSep sep (map builtins.toString list);
@@ -137,12 +200,15 @@ let
        else if builtins.isAttrs called then
          [ called ] ++ builtins.concatMap flattenModule (called.imports or [ ])
        else [ ];
-  baseModules = if hasFlake && builtins.pathExists flakeModuleList then import flakeModuleList else [ ];
+  baseModules = ${baseModulesExpression};
   modules = baseModules ++ inputModules;
   flattenedModules = builtins.concatMap flattenModule inputModules;
   mergeAttrs = builtins.foldl' lib.recursiveUpdate { };
+  nixosSystemOptions = ${nixosSystemOptionsExpression};
   rawOptions =
-    if lib ? evalModules then
+    if nixosSystemOptions != null then
+      nixosSystemOptions
+    else if lib ? evalModules then
       (lib.evalModules {
         inherit modules;
         specialArgs = { inherit lib pkgs modulesPath; };
@@ -182,6 +248,7 @@ let
 in {
   ok = true;
   mode = "browser-nixosModules";
+  moduleSource = ${moduleSourceExpression};
   optionCount = builtins.length pairs;
   inherit options;
   diagnostics = [ ];
@@ -301,7 +368,7 @@ in {
   }
 
   async function loadEvaluator() {
-    const createEvaluator = window.createNixBrowserEvaluator || window.createNixosRegeditEvaluator;
+    const createEvaluator = window.createLibevalWasm;
     if (typeof createEvaluator !== "function") return false;
     const module = await createEvaluator();
     const storage = await preparePersistentStorage(module);
@@ -312,7 +379,7 @@ in {
       await syncfs(module, false);
       return response;
     };
-    window.NixOSRegeditWasmEvaluator = {
+    window.NixOSRegeditEvaluator = {
       storage,
       currentSystem: async () => currentSystemRaw(),
       resolve: async (request) => {
@@ -334,11 +401,10 @@ in {
         if (looksLikePayload(wrappedResponse)) return wrappedResponse;
         if (rawResponse && rawResponse.ok === false) return rawResponse;
         return failure(
-          "The browser evaluator ran the Nix expression, but it did not return a NixOS module, module list, nixosModules attrset, or NixOS Regedit payload.",
+          "libeval-wasm ran the Nix expression, but it did not return a NixOS module, module list, nixosModules attrset, or NixOS Regedit payload.",
         );
       },
     };
-    window.NixOSRegeditEvaluator = window.NixOSRegeditWasmEvaluator;
     window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-ready"));
     return true;
   }

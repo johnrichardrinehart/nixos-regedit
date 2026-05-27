@@ -14,7 +14,7 @@ class ServerTests(unittest.TestCase):
     def run_server(self, evaluator):
         static_dir = Path(tempfile.mkdtemp())
         static_dir.joinpath("index.html").write_text(
-            '<!doctype html><script src="nix-browser-evaluator.js"></script>\n'
+            '<!doctype html><script src="libeval-wasm.js"></script>\n'
             '<script src="evaluator-loader.js"></script>',
             encoding="utf-8",
         )
@@ -43,7 +43,7 @@ class ServerTests(unittest.TestCase):
     def test_backend_index_uses_backend_loader(self):
         html = backend_index().decode("utf-8")
         self.assertIn('src="backend-loader.js"', html)
-        self.assertNotIn('src="nix-browser-evaluator.js"', html)
+        self.assertNotIn('src="libeval-wasm.js"', html)
         self.assertNotIn('src="evaluator-loader.js"', html)
         self.assertIn("local Python backend", html)
 

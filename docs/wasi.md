@@ -77,15 +77,14 @@ The UI builds its option tree in the browser from returned option docs.
 
 ## Emscripten port progress
 
-The current branch now has one browser evaluator target:
+The current branch now has one libeval-wasm target:
 
-- `.#nix-browser-evaluator`: a reusable Emscripten `SINGLE_FILE` module linked
+- `.#libeval-wasm`: a reusable Emscripten `SINGLE_FILE` module linked
   against Nix's C API closure. It installs
-  `share/nix-browser-evaluator/nix-browser-evaluator.js` and exports
-  `createNixBrowserEvaluator()`.
+  `share/libeval-wasm/libeval-wasm.js` and exports `createLibevalWasm()`.
 
-See `docs/nix-browser-evaluator.md` for the JavaScript/C ABI and persistent
-storage integration contract.
+See `docs/libeval-wasm.md` for the JavaScript/C ABI and persistent storage
+integration contract.
 
 The first direct Nix attempt failed because it linked native Linux shared
 objects into an Emscripten link:

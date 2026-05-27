@@ -1,27 +1,44 @@
-# Nix Browser Evaluator
+# libeval-wasm
 
-`.#nix-browser-evaluator` builds a reusable Emscripten `SINGLE_FILE` JavaScript
-module that embeds the Nix evaluator and its browser-compatible dependency
-closure.
+`.#libeval-wasm` builds a reusable Emscripten `SINGLE_FILE` JavaScript module
+that embeds the Nix evaluator and its browser-compatible dependency closure.
 
 Build it with:
 
 ```sh
-nix build --builders '' .#nix-browser-evaluator
+nix build --builders '' .#libeval-wasm
+```
+
+From another flake, consume it as an ordinary package output:
+
+```nix
+{
+  inputs.nixos-regedit.url = "github:johnrichardrinehart/nixos-regedit";
+
+  outputs = { nixpkgs, nixos-regedit, ... }:
+    let
+      system = "x86_64-linux";
+      libevalWasm = nixos-regedit.packages.${system}.libeval-wasm;
+    in {
+      packages.${system}.my-app = nixpkgs.legacyPackages.${system}.stdenvNoCC.mkDerivation {
+        # Copy ${libevalWasm}/share/libeval-wasm/libeval-wasm.js into your app.
+      };
+    };
+}
 ```
 
 The package installs:
 
 ```text
-share/nix-browser-evaluator/nix-browser-evaluator.js
+share/libeval-wasm/libeval-wasm.js
 ```
 
 Load that file in a page and instantiate the module:
 
 ```html
-<script src="nix-browser-evaluator.js"></script>
+<script src="libeval-wasm.js"></script>
 <script>
-  const module = await createNixBrowserEvaluator();
+  const module = await createLibevalWasm();
   const evalNix = module.cwrap("libeval_wasm", "string", ["string"]);
   const currentSystem = module.cwrap("libeval_wasm_current_system", "string", []);
 

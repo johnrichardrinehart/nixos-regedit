@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from nixos_regedit.evaluator import (
+    REPO_ROOT,
     EvaluationFailure,
     EvaluationRequest,
     build_command,
@@ -61,7 +62,28 @@ class EvaluatorUnitTests(unittest.TestCase):
             runner=runner,
         )
         self.assertEqual(result["kind"], "flake")
-        self.assertEqual(result["identity"], "github:owner/repo/rev?narHash=sha256-test")
+        self.assertEqual(
+            result["identity"], "github:owner/repo/rev?narHash=sha256-test#nixosModules.default"
+        )
+        self.assertEqual(calls[0][-3:], ["metadata", "--json", "github:owner/repo"])
+
+    def test_resolve_flake_selector_preserves_selected_output(self):
+        calls = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            return completed({"url": "github:owner/repo/rev?narHash=sha256-test"})
+
+        result = resolve_payload(
+            {
+                "expression": "github:owner/repo#foo",
+                "allowFetch": True,
+                "system": "x86_64-linux",
+            },
+            runner=runner,
+        )
+        self.assertEqual(result["kind"], "flake")
+        self.assertEqual(result["identity"], "github:owner/repo/rev?narHash=sha256-test#foo")
         self.assertEqual(calls[0][-3:], ["metadata", "--json", "github:owner/repo"])
 
     def test_fetch_disabled_refuses_unpinned_remote_flake_before_nix(self):
@@ -83,6 +105,9 @@ class EvaluatorUnitTests(unittest.TestCase):
     def test_existing_local_flake_refs_are_normalized_to_path_refs(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(normalize_flake_ref(tmp, "/"), f"path:{tmp}")
+            self.assertEqual(
+                normalize_flake_ref(f"{tmp}#customModules", "/"), f"path:{tmp}#customModules"
+            )
             self.assertEqual(normalize_flake_ref(".", tmp), f"path:{tmp}")
         self.assertEqual(normalize_flake_ref("github:owner/repo", "/"), "github:owner/repo")
 
@@ -110,7 +135,23 @@ class EvaluatorUnitTests(unittest.TestCase):
 
         flake_expr = flake_ref_expr("github:owner/repo/rev?narHash=sha256-test", "x86_64-linux")
         self.assertIn("support.lib.nixpkgsLib", flake_expr)
+        self.assertIn('[ "nixosModules" "default" ]', flake_expr)
         self.assertNotIn("<nixpkgs>", flake_expr)
+
+        selected_expr = flake_ref_expr(
+            "github:owner/repo/rev?narHash=sha256-test#foo.bar", "x86_64-linux"
+        )
+        self.assertIn('[ "foo" "bar" ]', selected_expr)
+        self.assertNotIn(
+            'builtins.getFlake "github:owner/repo/rev?narHash=sha256-test#foo.bar"', selected_expr
+        )
+        self.assertIn('moduleSource = "flake attribute .#foo.bar"', selected_expr)
+
+        attrset_expr = flake_ref_expr(
+            "github:owner/repo/rev?narHash=sha256-test#nixosModules", "x86_64-linux"
+        )
+        self.assertIn('[ "nixosModules" ]', attrset_expr)
+        self.assertNotIn('[ "nixosModules" "default" ]', attrset_expr)
 
     def test_flake_like_input_falls_back_to_expression(self):
         calls = []
@@ -124,6 +165,34 @@ class EvaluatorUnitTests(unittest.TestCase):
         result = evaluate(EvaluationRequest("demo"), runner=runner)
         self.assertEqual(result["mode"], "expression-nixosModules")
         self.assertEqual(len(calls), 2)
+
+    def test_flake_evaluation_defaults_to_nixos_modules_and_preserves_selector(self):
+        calls = []
+
+        def runner(command, **kwargs):
+            calls.append(command)
+            if command[:4] == [
+                "nix",
+                "--extra-experimental-features",
+                "nix-command flakes",
+                "flake",
+            ]:
+                return completed({"url": "github:owner/repo/rev?narHash=sha256-test"})
+            return completed({"ok": True, "options": {}, "optionCount": 0, "moduleCount": 0})
+
+        result = evaluate(
+            EvaluationRequest("github:owner/repo#foo.bar", allow_fetch=True, system="x86_64-linux"),
+            runner=runner,
+        )
+
+        self.assertEqual(result["mode"], "flake-nixosModules")
+        self.assertEqual(calls[0][-3:], ["metadata", "--json", "github:owner/repo"])
+        self.assertIn("github:owner/repo/rev?narHash=sha256-test", calls[1][-1])
+        self.assertNotIn(
+            'builtins.getFlake "github:owner/repo/rev?narHash=sha256-test#foo.bar"',
+            calls[1][-1],
+        )
+        self.assertIn('[ "foo" "bar" ]', calls[1][-1])
 
 
 class EvaluatorIntegrationTests(unittest.TestCase):
@@ -142,6 +211,7 @@ class EvaluatorIntegrationTests(unittest.TestCase):
         self.assertNotIn("services.nginx.enable", result["options"])
         self.assertLess(result["optionCount"], 10)
         self.assertEqual(result["mode"], "expression-nixosModules")
+        self.assertEqual(result["moduleSource"], "input expression")
 
     @unittest.skipIf(
         os.environ.get("NIXOS_REGEDIT_SKIP_NIX_INTEGRATION") == "1",
@@ -206,7 +276,145 @@ class EvaluatorIntegrationTests(unittest.TestCase):
             )
             result = evaluate(EvaluationRequest(os.fspath(path)), timeout=180)
             self.assertEqual(result["mode"], "flake-nixosModules")
+            self.assertEqual(result["moduleSource"], "flake attribute .#nixosModules.default")
             self.assertEqual(result["options"]["demo.count"]["default"]["text"], "7")
+
+    @unittest.skipIf(
+        os.environ.get("NIXOS_REGEDIT_SKIP_NIX_INTEGRATION") == "1",
+        "nix eval inside a Nix build requires recursive-Nix support",
+    )
+    def test_local_flake_explicit_module_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            path.joinpath("flake.nix").write_text(
+                textwrap.dedent(
+                    """
+                    {
+                      outputs = { self }: {
+                        customModules.default = { lib, ... }: {
+                          options.demo.selected = lib.mkOption {
+                            type = lib.types.str;
+                            default = "custom";
+                            description = "Selected custom output.";
+                          };
+                        };
+                        nixosModules.default = { lib, ... }: {
+                          options.demo.unselected = lib.mkEnableOption "unselected output";
+                        };
+                      };
+                    }
+                    """
+                )
+            )
+            result = evaluate(EvaluationRequest(f"{path}#customModules"), timeout=180)
+            self.assertEqual(result["mode"], "flake-nixosModules")
+            self.assertEqual(result["moduleSource"], "flake attribute .#customModules")
+            self.assertIn("demo.selected", result["options"])
+            self.assertNotIn("demo.unselected", result["options"])
+
+    @unittest.skipIf(
+        os.environ.get("NIXOS_REGEDIT_SKIP_NIX_INTEGRATION") == "1",
+        "nix eval inside a Nix build requires recursive-Nix support",
+    )
+    def test_local_flake_falls_back_to_module_list_when_default_output_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            modules = path / "nixos" / "modules"
+            modules.mkdir(parents=True)
+            modules.joinpath("module-list.nix").write_text("[ ./demo.nix ]")
+            modules.joinpath("demo.nix").write_text(
+                textwrap.dedent(
+                    """
+                    { lib, ... }: {
+                      options.demo.fromModuleList = lib.mkEnableOption "module-list fallback";
+                    }
+                    """
+                )
+            )
+            path.joinpath("flake.nix").write_text("{ outputs = { self }: { }; }")
+            result = evaluate(EvaluationRequest(os.fspath(path)), timeout=180)
+            self.assertEqual(result["mode"], "flake-module-list")
+            self.assertEqual(result["moduleSource"], "nixos/modules/module-list.nix")
+            self.assertIn("demo.fromModuleList", result["options"])
+
+    @unittest.skipIf(
+        os.environ.get("NIXOS_REGEDIT_SKIP_NIX_INTEGRATION") == "1",
+        "nix eval inside a Nix build requires recursive-Nix support",
+    )
+    def test_local_flake_prefers_nixos_system_before_module_list_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            modules = path / "nixos" / "modules"
+            modules.mkdir(parents=True)
+            modules.joinpath("module-list.nix").write_text("[ ./module-list-only.nix ]")
+            modules.joinpath("module-list-only.nix").write_text(
+                textwrap.dedent(
+                    """
+                    { lib, ... }: {
+                      options.demo.fromModuleList = lib.mkEnableOption "module-list fallback";
+                    }
+                    """
+                )
+            )
+            path.joinpath("flake.nix").write_text(
+                textwrap.dedent(
+                    """
+                    {
+                      outputs = { self }: {
+                        lib =
+                          let
+                            baseLib = (builtins.getFlake @ROOT_REF@).lib.nixpkgsLib;
+                          in
+                          baseLib // {
+                            nixosSystem = { system, modules }:
+                              baseLib.evalModules {
+                                modules = modules ++ [
+                                  ({ lib, ... }: {
+                                    options.demo.fromNixosSystem =
+                                      lib.mkEnableOption "nixosSystem fallback";
+                                  })
+                                ];
+                              };
+                          };
+                      };
+                    }
+                    """
+                ).replace("@ROOT_REF@", json.dumps("path:" + os.fspath(REPO_ROOT)))
+            )
+            result = evaluate(EvaluationRequest(os.fspath(path)), timeout=180)
+            self.assertEqual(result["mode"], "flake-nixosSystem")
+            self.assertEqual(result["moduleSource"], "flake.lib.nixosSystem")
+            self.assertIn("demo.fromNixosSystem", result["options"])
+            self.assertNotIn("demo.fromModuleList", result["options"])
+
+    @unittest.skipIf(
+        os.environ.get("NIXOS_REGEDIT_SKIP_NIX_INTEGRATION") == "1",
+        "nix eval inside a Nix build requires recursive-Nix support",
+    )
+    def test_local_flake_does_not_fall_back_when_default_output_is_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            modules = path / "nixos" / "modules"
+            modules.mkdir(parents=True)
+            modules.joinpath("module-list.nix").write_text("[ ./demo.nix ]")
+            modules.joinpath("demo.nix").write_text(
+                textwrap.dedent(
+                    """
+                    { lib, ... }: {
+                      options.demo.fromModuleList = lib.mkEnableOption "module-list fallback";
+                    }
+                    """
+                )
+            )
+            path.joinpath("flake.nix").write_text(
+                "{ outputs = { self }: { nixosModules.default = 1; }; }"
+            )
+            with self.assertRaises(EvaluationFailure) as caught:
+                evaluate(EvaluationRequest(os.fspath(path)), timeout=180)
+            self.assertIn(".#nixosModules.default", caught.exception.error)
+            self.assertNotIn(
+                "flake-module-list", [attempt["mode"] for attempt in caught.exception.attempts]
+            )
 
 
 if __name__ == "__main__":

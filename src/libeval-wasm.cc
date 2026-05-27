@@ -123,7 +123,7 @@ int curl_easy_getinfo(void *, int, ...) {
 }
 
 const char *curl_easy_strerror(int) {
-    return "curl unavailable in browser evaluator";
+    return "curl unavailable in libeval-wasm";
 }
 
 void *curl_multi_init(void) {
@@ -161,7 +161,7 @@ int curl_multi_setopt(void *, int, ...) {
 }
 
 const char *curl_multi_strerror(int) {
-    return "curl unavailable in browser evaluator";
+    return "curl unavailable in libeval-wasm";
 }
 
 int curl_multi_cleanup(void *) {

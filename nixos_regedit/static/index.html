@@ -26,6 +26,7 @@
           Copy fs path
         </button>
         <button id="helpButton" title="Show help">Help</button>
+        <button id="debugLogButton" title="Show evaluation debug log">Debug log</button>
         <label class="filter-field">
           <span>Filter</span>
           <input id="filterInput" type="search" autocomplete="off" spellcheck="false" />
@@ -46,6 +47,10 @@
       <section id="evaluatedRow" class="evaluated-row" hidden>
         <span>Evaluated flake URI</span>
         <code id="evaluatedExpression"></code>
+      </section>
+      <section id="moduleSourceRow" class="evaluated-row" hidden>
+        <span>Module source</span>
+        <code id="moduleSource"></code>
       </section>
       <section id="diagnostics" class="diagnostics" hidden></section>
       <section id="content" class="content" hidden>
@@ -133,12 +138,20 @@
           <section>
             <h2>Input</h2>
             <p>
-              The input accepts a flake URI whose flake exposes <code>nixosModules</code>, or a Nix
-              expression returning the same shape as <code>nixosModules</code>.
+              The input accepts a flake URI whose flake exposes <code>nixosModules</code>, a flake
+              URI with an explicit output selector such as <code>github:owner/repo#foo</code>, or a
+              Nix expression returning the same shape.
             </p>
             <p>
-              An arbitrary expression should return one of these: a NixOS module, a list of NixOS
+              Bare flake URIs default to <code>#nixosModules.default</code>. Explicit flake outputs
+              and arbitrary expressions should return one of these: a NixOS module, a list of NixOS
               modules, or an attrset whose values are NixOS modules.
+            </p>
+            <p>
+              If a bare flake URI has no <code>#nixosModules.default</code>, the evaluator falls
+              back to <code>flake.lib.nixosSystem</code>, then
+              <code>nixos/modules/module-list.nix</code>. If the default output exists but cannot be
+              evaluated as modules, evaluation fails instead of falling back.
             </p>
             <p>
               Modules may be functions like
@@ -158,13 +171,30 @@
             <h2>Standalone</h2>
             <p>
               The standalone page does not use an HTTP backend. Evaluation requires a compatible
-              browser evaluator embedded as <code>window.NixOSRegeditEvaluator</code>.
+              libeval-wasm integration embedded as
+              <code>window.NixOSRegeditEvaluator</code>.
             </p>
           </section>
         </div>
       </div>
     </section>
-    <script src="nix-browser-evaluator.js"></script>
+    <section
+      id="debugLogOverlay"
+      class="debug-log-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="debugLogTitle"
+      hidden
+    >
+      <div class="debug-log-dialog">
+        <header class="debug-log-titlebar">
+          <span id="debugLogTitle">Evaluation Debug Log</span>
+          <button id="debugLogCloseButton" type="button" title="Close debug log">Close</button>
+        </header>
+        <pre id="debugLogBody" class="debug-log-body"></pre>
+      </div>
+    </section>
+    <script src="libeval-wasm.js"></script>
     <script src="evaluator-loader.js"></script>
     <script src="app.js"></script>
   </body>

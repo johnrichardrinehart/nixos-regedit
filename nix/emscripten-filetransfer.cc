@@ -30,7 +30,7 @@ FileTransferSettings fileTransferSettings;
 
 static GlobalConfig::Register rFileTransferSettings(&fileTransferSettings);
 
-EM_JS(int, nixos_regedit_browser_fetch,
+EM_JS(int, libeval_wasm_fetch,
       (const char *urlPtr, int method, const char *expectedETagPtr, char **outData, size_t *outSize,
        char **outUrl, char **outEtag, char **outError),
       {
@@ -50,6 +50,26 @@ EM_JS(int, nixos_regedit_browser_fetch,
               : method === 3 ? "POST"
               : method === 4 ? "DELETE"
               : "GET";
+          const archiveInfo = value => {
+              try {
+                  const parsedUrl = new URL(value);
+                  const pathParts = parsedUrl.pathname.split("/").filter(Boolean);
+                  const githubArchive =
+                      parsedUrl.protocol === "https:" &&
+                      parsedUrl.hostname === "github.com" &&
+                      pathParts.length >= 4 &&
+                      pathParts[2] === "archive";
+                  const codeloadArchive =
+                      parsedUrl.protocol === "https:" &&
+                      parsedUrl.hostname === "codeload.github.com" &&
+                      pathParts.length >= 4 &&
+                      ["tar.gz", "zip", "legacy.tar.gz", "legacy.zip"].includes(pathParts[2]);
+                  return { parsedUrl, archive: githubArchive || codeloadArchive };
+              } catch (_) {
+                  return { parsedUrl: null, archive: false };
+              }
+          };
+          const targetInfo = archiveInfo(url);
           try {
               const xhr = new XMLHttpRequest();
               xhr.open(methodName, url, false);
@@ -73,11 +93,16 @@ EM_JS(int, nixos_regedit_browser_fetch,
               HEAPU32[outError >> 2] = 0;
               return xhr.status || 200;
           } catch (error) {
+              const githubArchive = targetInfo.archive;
+              const hint = githubArchive
+                  ? " GitHub archive downloads are blocked by GitHub CORS from ordinary browser pages; use the Python backend or a CORS-readable archive mirror."
+                  : " This can be caused by CORS, DNS, TLS, offline, or remote-server failures.";
               HEAPU32[outData >> 2] = 0;
               HEAPU32[outSize >> 2] = 0;
               HEAPU32[outUrl >> 2] = newUtf8(url);
               HEAPU32[outEtag >> 2] = 0;
-              HEAPU32[outError >> 2] = newUtf8(error && error.message ? error.message : error);
+              HEAPU32[outError >> 2] =
+                  newUtf8((error && error.message ? error.message : error) + hint);
               return -1;
           }
           // clang-format on
@@ -124,7 +149,7 @@ std::string displayUri(const FileTransferRequest &request) {
 FileTransferResult performBrowserTransfer(const FileTransferRequest &request) {
     if (request.method != HttpMethod::Get && request.method != HttpMethod::Head)
         throw FileTransferError(FileTransfer::Misc, std::nullopt,
-                                "browser evaluator only supports GET and HEAD transfers for '%s'",
+                                "libeval-wasm only supports GET and HEAD transfers for '%s'",
                                 displayUri(request));
 
     char *data = nullptr;
@@ -133,10 +158,10 @@ FileTransferResult performBrowserTransfer(const FileTransferRequest &request) {
     char *etag = nullptr;
     char *error = nullptr;
     int method = request.method == HttpMethod::Head ? 1 : 0;
-    int status = nixos_regedit_browser_fetch(
-        request.uri.to_string().c_str(), method,
-        request.expectedETag.empty() ? nullptr : request.expectedETag.c_str(), &data, &dataSize,
-        &finalUrl, &etag, &error);
+    int status =
+        libeval_wasm_fetch(request.uri.to_string().c_str(), method,
+                           request.expectedETag.empty() ? nullptr : request.expectedETag.c_str(),
+                           &data, &dataSize, &finalUrl, &etag, &error);
 
     MallocBytes body{data, dataSize};
     MallocString effectiveUrl{finalUrl};
@@ -145,7 +170,7 @@ FileTransferResult performBrowserTransfer(const FileTransferRequest &request) {
 
     if (status < 0)
         throw FileTransferError(FileTransfer::Misc, std::nullopt,
-                                "browser fetch failed for '%s': %s", displayUri(request),
+                                "libeval-wasm fetch failed for '%s': %s", displayUri(request),
                                 errorValue.str());
 
     FileTransferResult result;

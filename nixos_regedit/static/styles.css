@@ -53,7 +53,7 @@ button:active {
 
 .window {
   display: grid;
-  grid-template-rows: 24px 32px auto auto auto minmax(0, 1fr) 22px;
+  grid-template-rows: 24px 32px auto auto auto auto minmax(0, 1fr) 22px;
   height: 100vh;
   min-width: 980px;
   border: 2px solid;
@@ -493,6 +493,58 @@ th:nth-child(2) {
     12px Consolas,
     "Courier New",
     monospace;
+}
+
+.debug-log-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 18%);
+}
+
+.debug-log-overlay[hidden] {
+  display: none;
+}
+
+.debug-log-dialog {
+  display: grid;
+  grid-template-rows: 26px minmax(0, 1fr);
+  width: min(1100px, 100%);
+  height: min(700px, calc(100vh - 48px));
+  border: 2px solid;
+  border-color: var(--light) var(--dark) var(--dark) var(--light);
+  background: var(--face);
+  box-shadow: 3px 3px 0 rgb(0 0 0 / 35%);
+}
+
+.debug-log-titlebar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 5px 3px 7px;
+  color: white;
+  background: linear-gradient(90deg, #0a246a, #a6caf0);
+  font-weight: 700;
+}
+
+.debug-log-titlebar button {
+  min-height: 20px;
+  padding: 1px 8px;
+  font-weight: 400;
+}
+
+.debug-log-body {
+  margin: 5px;
+  padding: 6px;
+  overflow: auto;
+  border: 1px solid;
+  border-color: var(--dark) var(--light) var(--light) var(--dark);
+  background: #ffffff;
+  color: #111111;
 }
 
 pre {
