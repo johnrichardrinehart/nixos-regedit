@@ -43,9 +43,25 @@
         ./tools
         ./treefmt.nix
       ];
-      projectSource = fs.toSource {
+      qualityFileset = fs.unions [
+        projectFileset
+        ./infra
+      ];
+      qualitySource = fs.toSource {
         root = ./.;
-        fileset = projectFileset;
+        fileset = qualityFileset;
+      };
+      supportFlakeSource = fs.toSource {
+        root = ./.;
+        fileset = fs.unions [
+          ./flake.lock
+          ./flake.nix
+          ./lib
+          ./nix
+          ./nixos_regedit
+          ./src
+          ./tools
+        ];
       };
       evaluatorSource = fs.toSource {
         root = ./src;
@@ -66,6 +82,7 @@
         root = ./.;
         fileset = fs.unions [
           ./.github/workflows/pages.yml
+          ./infra/cloudflare/workers/archive-proxy.js
           ./lib
           ./nixos_regedit
           ./tests
@@ -96,7 +113,7 @@
           pkgs = pkgsFor system;
         in
         git-hooks.lib.${system}.run {
-          src = projectSource;
+          src = qualitySource;
           hooks = {
             actionlint.enable = true;
             check-json.enable = true;
@@ -151,7 +168,7 @@
                 --prefix PYTHONPATH : "$out/lib/nixos-regedit" \
                 --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nix ]} \
                 --set NIX_PATH nixpkgs=${nixpkgs} \
-                --set NIXOS_REGEDIT_FLAKE_REF path:${projectSource}
+                --set NIXOS_REGEDIT_FLAKE_REF path:${supportFlakeSource}
               runHook postInstall
             '';
           };
@@ -248,7 +265,7 @@
           pkgs = pkgsFor system;
         in
         {
-          formatting = (treefmtEval system).config.build.check projectSource;
+          formatting = (treefmtEval system).config.build.check qualitySource;
           pre-commit = preCommitCheck system;
           libeval-wasm = self.packages.${system}.libeval-wasm;
           standalone = self.packages.${system}.standalone;
@@ -290,6 +307,7 @@
               pkgs.statix
               pkgs.taplo
               pkgs.nix
+              pkgs.opentofu
               pkgs.pkg-config
               pkgs.python3
             ];

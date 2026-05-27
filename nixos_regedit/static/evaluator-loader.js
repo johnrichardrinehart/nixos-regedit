@@ -1,5 +1,6 @@
 (function () {
   const FLAKE_REF_RE = /^[A-Za-z0-9+._:/?=@%~-]+(?:#[A-Za-z0-9+._/?=@%~-]+)?$/;
+  window.NixOSRegeditStandalone = true;
 
   function nixString(value) {
     return JSON.stringify(String(value));
@@ -394,6 +395,7 @@ in {
       },
       evaluate: async (request) => {
         const system = request.system || currentSystemRaw();
+        window.LibevalWasmFetchConfig = request.fetchProxy || null;
         const rawResponse = await evalNix(request.expression);
         if (looksLikePayload(rawResponse)) return rawResponse;
         const wrappedResponse = await evalNix(browserModuleExpression(request.expression, system));

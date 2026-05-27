@@ -50,6 +50,21 @@ EM_JS(int, libeval_wasm_fetch,
               : method === 3 ? "POST"
               : method === 4 ? "DELETE"
               : "GET";
+          const archiveExtensions = [
+              ".tar",
+              ".tar.gz",
+              ".tgz",
+              ".tar.xz",
+              ".txz",
+              ".tar.bz2",
+              ".tbz2",
+              ".tar.zst",
+              ".zip",
+          ];
+          const hasArchiveExtension = parsedUrl => {
+              const path = parsedUrl.pathname.toLowerCase();
+              return archiveExtensions.some(extension => path.endsWith(extension));
+          };
           const archiveInfo = value => {
               try {
                   const parsedUrl = new URL(value);
@@ -64,17 +79,98 @@ EM_JS(int, libeval_wasm_fetch,
                       parsedUrl.hostname === "codeload.github.com" &&
                       pathParts.length >= 4 &&
                       ["tar.gz", "zip", "legacy.tar.gz", "legacy.zip"].includes(pathParts[2]);
-                  return { parsedUrl, archive: githubArchive || codeloadArchive };
+                  const gitlabArchive =
+                      parsedUrl.protocol === "https:" &&
+                      parsedUrl.hostname.endsWith("gitlab.com") &&
+                      (pathParts.includes("archive.tar.gz") ||
+                       pathParts.includes("archive.zip") ||
+                       (pathParts.includes("-") &&
+                        pathParts.includes("archive") &&
+                        hasArchiveExtension(parsedUrl)));
+                  const sourcehutArchive =
+                      parsedUrl.protocol === "https:" &&
+                      parsedUrl.hostname.endsWith("git.sr.ht") &&
+                      pathParts.includes("archive") &&
+                      hasArchiveExtension(parsedUrl);
+                  const genericArchive =
+                      parsedUrl.protocol === "https:" && hasArchiveExtension(parsedUrl);
+                  return {
+                      parsedUrl,
+                      archive: githubArchive || codeloadArchive || gitlabArchive ||
+                          sourcehutArchive || genericArchive,
+                  };
               } catch (_) {
                   return { parsedUrl: null, archive: false };
               }
           };
+          const parseNetrc = text => {
+              const credentials = {};
+              const stripQuotes = value => {
+                  const text = String(value || "");
+                  if (text.length >= 2) {
+                      const first = text.charCodeAt(0);
+                      const last = text.charCodeAt(text.length - 1);
+                      if ((first === 34 && last === 34) || (first === 39 && last === 39))
+                          return text.slice(1, -1);
+                  }
+                  return text;
+              };
+              const tokens = String(text || "").trim().split(/\\s+/).filter(Boolean);
+              let machine = "";
+              let login = "";
+              for (let index = 0; index < tokens.length; index += 1) {
+                  const token = stripQuotes(tokens[index]);
+                  if (token === "machine" || token === "default") {
+                      machine = token === "default"
+                          ? "default"
+                          : stripQuotes(tokens[++index]);
+                      login = "";
+                  } else if (token === "login") {
+                      login = stripQuotes(tokens[++index]);
+                  } else if (token === "password" && machine) {
+                      const password = stripQuotes(tokens[++index]);
+                      credentials[machine] = { login, password };
+                  }
+              }
+              return credentials;
+          };
+          const authorizationFor = (target, netrcText) => {
+              const credentials = parseNetrc(netrcText);
+              const entry = credentials[target.hostname] || credentials.default;
+              if (!entry || !entry.password)
+                  return "";
+              const user = entry.login || "token";
+              return "Basic " + btoa(`${user}:${entry.password}`);
+          };
           const targetInfo = archiveInfo(url);
+          const fetchConfig = globalThis.LibevalWasmFetchConfig || {};
+          const configuredProxy = fetchConfig && fetchConfig.enabled && fetchConfig.proxyUrl;
+          const proxyOrigin = value => {
+              try {
+                  return new URL(value).origin;
+              } catch (_) {
+                  return "";
+              }
+          };
+          const shouldProxy = Boolean(
+              configuredProxy &&
+              targetInfo.archive &&
+              (!targetInfo.parsedUrl ||
+               targetInfo.parsedUrl.origin !== proxyOrigin(configuredProxy))
+          );
           try {
               const xhr = new XMLHttpRequest();
-              xhr.open(methodName, url, false);
+              const requestUrl = shouldProxy
+                  ? `${fetchConfig.proxyUrl}?url=${encodeURIComponent(url)}`
+                  : url;
+              xhr.open(methodName, requestUrl, false);
               if (expectedETag)
                   xhr.setRequestHeader("If-None-Match", expectedETag);
+              if (shouldProxy && fetchConfig.netrc && targetInfo.parsedUrl) {
+                  const auth = authorizationFor(targetInfo.parsedUrl, fetchConfig.netrc);
+                  if (auth)
+                      xhr.setRequestHeader("X-Upstream-Authorization", auth);
+              }
               xhr.overrideMimeType("text/plain; charset=x-user-defined");
               xhr.send(null);
 
@@ -84,7 +180,8 @@ EM_JS(int, libeval_wasm_fetch,
               for (let i = 0; i < size; i += 1)
                   HEAPU8[dataPtr + i] = response.charCodeAt(i) & 0xff;
 
-              const finalUrlPtr = newUtf8(xhr.responseURL || url);
+              const finalUrlPtr = newUtf8(xhr.getResponseHeader("X-Upstream-URL") ||
+                  xhr.responseURL || url);
               const etagPtr = newUtf8(xhr.getResponseHeader("ETag") || "");
               HEAPU32[outData >> 2] = dataPtr;
               HEAPU32[outSize >> 2] = size;
@@ -95,7 +192,7 @@ EM_JS(int, libeval_wasm_fetch,
           } catch (error) {
               const githubArchive = targetInfo.archive;
               const hint = githubArchive
-                  ? " GitHub archive downloads are blocked by GitHub CORS from ordinary browser pages; use the Python backend or a CORS-readable archive mirror."
+                  ? " Archive downloads can be blocked by CORS from ordinary browser pages; enable the standalone archive proxy, use the Python backend, or use a CORS-readable archive mirror."
                   : " This can be caused by CORS, DNS, TLS, offline, or remote-server failures.";
               HEAPU32[outData >> 2] = 0;
               HEAPU32[outSize >> 2] = 0;

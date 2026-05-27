@@ -1,3 +1,4 @@
+{ pkgs, ... }:
 {
   projectRootFile = "flake.nix";
 
@@ -31,5 +32,10 @@
       "*.yaml"
       "*.yml"
     ];
+    opentofu = {
+      command = "${pkgs.opentofu}/bin/tofu";
+      options = [ "fmt" ];
+      includes = [ "*.tf" ];
+    };
   };
 }

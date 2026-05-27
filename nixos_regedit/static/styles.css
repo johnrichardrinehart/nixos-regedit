@@ -53,7 +53,7 @@ button:active {
 
 .window {
   display: grid;
-  grid-template-rows: 24px 32px auto auto auto auto minmax(0, 1fr) 22px;
+  grid-template-rows: 24px 32px auto auto auto auto auto minmax(0, 1fr) 22px;
   height: 100vh;
   min-width: 980px;
   border: 2px solid;
@@ -193,8 +193,59 @@ textarea {
   grid-column: 2;
 }
 
-.evaluated-row {
+.standalone-network-row {
   grid-row: 4;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  grid-auto-rows: min-content;
+  column-gap: 10px;
+  row-gap: 7px;
+  padding: 8px;
+  border-top: 1px solid var(--light);
+  border-bottom: 1px solid var(--mid);
+}
+
+.standalone-network-row[hidden] {
+  display: none;
+}
+
+.standalone-network-row > label {
+  grid-column: 1;
+  align-self: center;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.standalone-network-row > input,
+.standalone-network-row > textarea {
+  grid-column: 2;
+}
+
+.proxy-url-input {
+  width: 100%;
+  height: 20px;
+  padding: 2px 4px;
+  font:
+    12px Consolas,
+    "Courier New",
+    monospace;
+}
+
+.netrc-input {
+  width: 100%;
+  min-height: 24px;
+  height: 38px;
+  max-height: 24vh;
+  resize: vertical;
+  padding: 4px;
+  font:
+    12px Consolas,
+    "Courier New",
+    monospace;
+}
+
+.evaluated-row {
+  grid-row: 5;
   display: grid;
   grid-template-columns: 150px 1fr;
   gap: 6px;
@@ -225,7 +276,7 @@ textarea {
 }
 
 .diagnostics {
-  grid-row: 5;
+  grid-row: 6;
   margin: 5px;
   padding: 6px;
   max-height: 160px;
@@ -266,7 +317,7 @@ textarea {
 }
 
 .content {
-  grid-row: 6;
+  grid-row: 7;
   display: grid;
   grid-template-columns: minmax(190px, 28vw) 5px 1fr;
   min-height: 0;
@@ -557,7 +608,7 @@ pre {
 }
 
 .statusbar {
-  grid-row: 7;
+  grid-row: 8;
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 4px;
@@ -580,7 +631,7 @@ pre {
 
 @media (max-width: 820px) {
   .window {
-    grid-template-rows: 24px 58px auto auto auto minmax(0, 1fr) 22px;
+    grid-template-rows: 24px 58px auto auto auto auto auto minmax(0, 1fr) 22px;
   }
 
   .content {
@@ -588,6 +639,7 @@ pre {
   }
 
   .expression-row,
+  .standalone-network-row,
   .evaluated-row {
     grid-template-columns: 1fr;
   }
@@ -597,7 +649,10 @@ pre {
   .system-label,
   .system-input,
   .fetch-label,
-  .fetch-input {
+  .fetch-input,
+  .standalone-network-row > label,
+  .standalone-network-row > input,
+  .standalone-network-row > textarea {
     grid-column: 1;
     grid-row: auto;
   }

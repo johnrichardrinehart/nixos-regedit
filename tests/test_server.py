@@ -45,7 +45,11 @@ class ServerTests(unittest.TestCase):
         self.assertIn('src="backend-loader.js"', html)
         self.assertNotIn('src="libeval-wasm.js"', html)
         self.assertNotIn('src="evaluator-loader.js"', html)
+        self.assertNotIn('id="standaloneNetworkRow"', html)
+        self.assertNotIn('id="proxyUrl"', html)
+        self.assertNotIn('id="netrcInput"', html)
         self.assertIn("local Python backend", html)
+        self.assertIn("system <code>nix</code>", html)
 
     def test_health_and_static(self):
         base = self.run_server(lambda payload: {"ok": True, "options": {}, "optionCount": 0})

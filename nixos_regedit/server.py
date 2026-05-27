@@ -23,10 +23,44 @@ Evaluator = Callable[[dict[str, Any]], dict[str, Any]]
 
 def backend_index(static_dir: Path = STATIC_DIR) -> bytes:
     html = static_dir.joinpath("index.html").read_text(encoding="utf-8")
+    standalone_fetch_help = (
+        "Sources whose archives are not\n"
+        "              CORS-readable from local pages, including GitHub codeload archives, need "
+        "the\n"
+        "              configured archive proxy, the Python backend app, or a CORS-readable "
+        "pinned source.\n"
+        "              The default archive proxy is restricted to HTTPS archive URLs such as "
+        "GitHub, GitLab,\n"
+        "              SourceHut, and common tar/zip archives, and it is rate-limited."
+    )
+    backend_fetch_help = (
+        "Sources whose archives are not\n"
+        "              CORS-readable from local pages can still be evaluated here because the "
+        "local\n"
+        "              Python backend delegates fetching to the system <code>nix</code> command."
+    )
     html = html.replace('    <script src="libeval-wasm.js"></script>\n', "")
     html = html.replace(
         '    <script src="evaluator-loader.js"></script>',
         '    <script src="backend-loader.js"></script>',
+    )
+    html = html.replace(
+        "      <!-- standalone-network-start -->\n"
+        '      <section id="standaloneNetworkRow" class="standalone-network-row" hidden>\n'
+        '        <label for="proxyEnabled">Use archive proxy</label>\n'
+        '        <input id="proxyEnabled" class="fetch-input" type="checkbox" />\n'
+        '        <label for="proxyUrl">Archive proxy URL</label>\n'
+        '        <input id="proxyUrl" class="proxy-url-input" type="url" spellcheck="false" />\n'
+        '        <label for="netrcInput">Netrc</label>\n'
+        "        <textarea\n"
+        '          id="netrcInput"\n'
+        '          class="netrc-input"\n'
+        '          spellcheck="false"\n'
+        '          placeholder="machine github.com login USER password TOKEN"\n'
+        "        ></textarea>\n"
+        "      </section>\n"
+        "      <!-- standalone-network-end -->\n",
+        "",
     )
     html = html.replace(
         "The standalone page does not use an HTTP backend. Evaluation requires a compatible\n"
@@ -34,6 +68,12 @@ def backend_index(static_dir: Path = STATIC_DIR) -> bytes:
         "              <code>window.NixOSRegeditEvaluator</code>.",
         "This server uses the local Python backend and the system <code>nix</code> command for\n"
         "              evaluation.",
+    )
+    html = html.replace(standalone_fetch_help, backend_fetch_help)
+    html = html.replace(
+        "The standalone netrc field is optional and is used only for proxied archive fetches.\n"
+        "              It is never placed in the URL.",
+        "No browser archive proxy is used by this backend page.",
     )
     return html.encode("utf-8")
 

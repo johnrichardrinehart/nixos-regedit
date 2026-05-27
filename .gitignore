@@ -4,3 +4,12 @@ __pycache__/
 result
 .direnv/
 .pre-commit-config.yaml
+.cloudflare-token
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+tfplan
+*.tfplan

@@ -44,6 +44,21 @@
         <label class="fetch-label" for="allowFetch">Allow fetch</label>
         <input id="allowFetch" class="fetch-input" type="checkbox" />
       </section>
+      <!-- standalone-network-start -->
+      <section id="standaloneNetworkRow" class="standalone-network-row" hidden>
+        <label for="proxyEnabled">Use archive proxy</label>
+        <input id="proxyEnabled" class="fetch-input" type="checkbox" />
+        <label for="proxyUrl">Archive proxy URL</label>
+        <input id="proxyUrl" class="proxy-url-input" type="url" spellcheck="false" />
+        <label for="netrcInput">Netrc</label>
+        <textarea
+          id="netrcInput"
+          class="netrc-input"
+          spellcheck="false"
+          placeholder="machine github.com login USER password TOKEN"
+        ></textarea>
+      </section>
+      <!-- standalone-network-end -->
       <section id="evaluatedRow" class="evaluated-row" hidden>
         <span>Evaluated flake URI</span>
         <code id="evaluatedExpression"></code>
@@ -131,8 +146,14 @@
             </p>
             <p>
               In the standalone page, browser CORS rules still apply. Sources whose archives are not
-              CORS-readable from local pages, including GitHub codeload archives, need the Python
-              backend app or a CORS-readable pinned source.
+              CORS-readable from local pages, including GitHub codeload archives, need the
+              configured archive proxy, the Python backend app, or a CORS-readable pinned source.
+              The default archive proxy is restricted to HTTPS archive URLs such as GitHub, GitLab,
+              SourceHut, and common tar/zip archives, and it is rate-limited.
+            </p>
+            <p>
+              The standalone netrc field is optional and is used only for proxied archive fetches.
+              It is never placed in the URL.
             </p>
           </section>
           <section>

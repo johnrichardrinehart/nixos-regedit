@@ -18,6 +18,9 @@ const state = {
 const CACHE_DB = "nixos-regedit-cache";
 const CACHE_STORE = "evaluations";
 const CACHE_VERSION = 1;
+const DEFAULT_ARCHIVE_PROXY_URL =
+  "https://nixos-regedit-archive-proxy.johnrichardrinehart.workers.dev";
+const NETWORK_CONFIG_STORE = "nixos-regedit-standalone-network";
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,6 +30,10 @@ const elements = {
   evaluatedExpression: $("evaluatedExpression"),
   moduleSourceRow: $("moduleSourceRow"),
   moduleSource: $("moduleSource"),
+  standaloneNetworkRow: $("standaloneNetworkRow"),
+  proxyEnabled: $("proxyEnabled"),
+  proxyUrl: $("proxyUrl"),
+  netrc: $("netrcInput"),
   filter: $("filterInput"),
   allowFetch: $("allowFetch"),
   system: $("systemInput"),
@@ -53,6 +60,45 @@ let pendingUrlExpanded = null;
 let filterTimer = null;
 let evaluatorAvailable = false;
 let evaluatorLoadSettled = Boolean(window.NixOSRegeditEvaluator);
+let standaloneMode = Boolean(window.NixOSRegeditStandalone);
+
+function loadStandaloneNetworkConfig() {
+  standaloneMode = Boolean(window.NixOSRegeditStandalone);
+  if (!elements.standaloneNetworkRow) return;
+  elements.standaloneNetworkRow.hidden = !standaloneMode;
+  if (!standaloneMode) return;
+
+  let config = {};
+  try {
+    config = JSON.parse(window.localStorage.getItem(NETWORK_CONFIG_STORE) || "{}");
+  } catch (error) {
+    config = {};
+  }
+  elements.proxyEnabled.checked = config.proxyEnabled !== false;
+  elements.proxyUrl.value = config.proxyUrl || DEFAULT_ARCHIVE_PROXY_URL;
+  elements.netrc.value = config.netrc || "";
+}
+
+function saveStandaloneNetworkConfig() {
+  if (!standaloneMode || !elements.standaloneNetworkRow) return;
+  const config = {
+    proxyEnabled: elements.proxyEnabled.checked,
+    proxyUrl: elements.proxyUrl.value.trim(),
+    netrc: elements.netrc.value,
+  };
+  window.localStorage.setItem(NETWORK_CONFIG_STORE, JSON.stringify(config));
+}
+
+function standaloneFetchConfig() {
+  if (!standaloneMode || !elements.proxyEnabled || !elements.proxyEnabled.checked) return null;
+  const proxyUrl = elements.proxyUrl.value.trim();
+  if (!proxyUrl) return null;
+  return {
+    enabled: true,
+    proxyUrl,
+    netrc: elements.netrc.value,
+  };
+}
 
 function regeditEvaluator() {
   const evaluator = window.NixOSRegeditEvaluator || null;
@@ -360,7 +406,7 @@ function browserNetworkFailureHint(message) {
   return [
     "Browser network failure: the browser could not read the remote URL.",
     "The browser API does not expose enough detail to reliably distinguish CORS, DNS, TLS, offline, or remote-server failures.",
-    "If this is a GitHub archive URL in the standalone page, CORS is the likely cause. Use the Python backend app or a CORS-readable pinned archive.",
+    "If this is a GitHub, GitLab, SourceHut, or tarball archive URL in the standalone page, CORS is the likely cause. Enable the archive proxy, use the Python backend app, or use a CORS-readable pinned archive.",
   ].join("\n");
 }
 
@@ -433,7 +479,13 @@ async function cacheKeyFor(identity) {
 }
 
 async function cacheIdentityFor(expression, allowFetch, system) {
-  const payload = await regeditEvaluator().resolve({ expression, allowFetch, system });
+  const fetchProxy = standaloneFetchConfig();
+  const payload = await regeditEvaluator().resolve({
+    expression,
+    allowFetch,
+    system,
+    fetchProxy,
+  });
   if (!payload.ok) {
     const attempts = (payload.attempts || []).map(
       (attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`,
@@ -445,6 +497,12 @@ async function cacheIdentityFor(expression, allowFetch, system) {
     identity: payload.identity,
     system: payload.system,
     allowFetch,
+    fetchProxy: standaloneMode
+      ? {
+          enabled: Boolean(fetchProxy),
+          proxyUrl: fetchProxy ? fetchProxy.proxyUrl : "",
+        }
+      : null,
   };
 }
 
@@ -865,6 +923,7 @@ async function evaluate() {
       expression: evaluationExpression,
       allowFetch,
       system,
+      fetchProxy: standaloneFetchConfig(),
     });
     if (!payload.ok) {
       const attempts = (payload.attempts || []).map(
@@ -986,6 +1045,11 @@ elements.allowFetch.addEventListener("change", () => {
   markInputChanged();
   updateUrlState();
 });
+if (elements.proxyEnabled) {
+  elements.proxyEnabled.addEventListener("change", saveStandaloneNetworkConfig);
+  elements.proxyUrl.addEventListener("input", saveStandaloneNetworkConfig);
+  elements.netrc.addEventListener("input", saveStandaloneNetworkConfig);
+}
 elements.expand.addEventListener("click", () => {
   const paths = [];
   collectPaths(state.tree, paths);
@@ -1023,6 +1087,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 loadUrlState();
+loadStandaloneNetworkConfig();
 renderEvaluatedExpression();
 renderAll();
 refreshEvaluatorAvailability();
