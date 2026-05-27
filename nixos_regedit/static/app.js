@@ -5,6 +5,7 @@ const state = {
   selectedPath: "",
   selectedOptionKey: null,
   evaluatedExpression: null,
+  evaluatedExpressionInput: null,
   declarationCopyIndex: 0,
   lastMode: "",
   lastModuleSource: "",
@@ -158,7 +159,6 @@ function loadUrlState() {
   const system = params.get("system");
   const filter = params.get("filter");
   const fetchMode = params.get("fetch");
-  state.evaluatedExpression = params.get("evaluatedExpression");
   pendingUrlOption = params.get("option");
   const expanded = params.get("expanded");
   if (expanded) {
@@ -188,9 +188,6 @@ function updateUrlState() {
   const system = elements.system.value.trim();
   const filter = state.filterText.trim();
   if (expression) params.set("expression", expression);
-  if (state.evaluatedExpression && state.evaluatedExpression !== expression) {
-    params.set("evaluatedExpression", state.evaluatedExpression);
-  }
   if (system) params.set("system", system);
   if (filter) params.set("filter", filter);
   if (elements.allowFetch.checked) params.set("fetch", "1");
@@ -231,7 +228,9 @@ function closeHelp() {
 function renderEvaluatedExpression() {
   const expression = elements.expression.value.trim();
   const evaluated = state.evaluatedExpression;
-  const show = Boolean(evaluated && evaluated !== expression);
+  const show = Boolean(
+    evaluated && state.evaluatedExpressionInput === expression && evaluated !== expression,
+  );
   elements.evaluatedRow.hidden = !show;
   elements.evaluatedExpression.textContent = show ? evaluated : "";
 }
@@ -888,8 +887,6 @@ async function evaluate() {
     }
     return;
   }
-  const evaluationExpression =
-    !allowFetch && state.evaluatedExpression ? state.evaluatedExpression : expression;
   if (!expression) {
     resetResults();
     showDiagnostics(["expression is required"]);
@@ -907,9 +904,10 @@ async function evaluate() {
   }
   showDiagnostics([]);
   try {
-    const cacheIdentity = await cacheIdentityFor(evaluationExpression, allowFetch, system);
+    const cacheIdentity = await cacheIdentityFor(expression, allowFetch, system);
     state.evaluatedExpression =
       cacheIdentity && cacheIdentity.kind === "flake" ? cacheIdentity.identity : null;
+    state.evaluatedExpressionInput = expression;
     const cacheKey = cacheIdentity ? await cacheKeyFor(cacheIdentity) : null;
     if (cacheKey) {
       const cached = await cacheGet(cacheKey);
@@ -920,7 +918,7 @@ async function evaluate() {
     }
 
     const payload = await regeditEvaluator().evaluate({
-      expression: evaluationExpression,
+      expression,
       allowFetch,
       system,
       fetchProxy: standaloneFetchConfig(),
@@ -1024,6 +1022,7 @@ elements.expression.addEventListener("keydown", (event) => {
 elements.expression.addEventListener("input", () => {
   state.selectedOptionKey = null;
   state.evaluatedExpression = null;
+  state.evaluatedExpressionInput = null;
   renderEvaluatedExpression();
   markInputChanged();
   updateUrlState();
@@ -1037,6 +1036,7 @@ elements.filter.addEventListener("keydown", (event) => {
 });
 elements.system.addEventListener("input", () => {
   state.evaluatedExpression = null;
+  state.evaluatedExpressionInput = null;
   renderEvaluatedExpression();
   markInputChanged();
   updateUrlState();

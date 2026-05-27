@@ -45,6 +45,14 @@
     };
   }
 
+  function isRemoteUnpinnedFlakeRef(value) {
+    const selected = splitFlakeSelector(value);
+    const ref = selected.ref;
+    return (
+      /^[A-Za-z][A-Za-z0-9+.-]*:/.test(ref) && !ref.startsWith("path:") && !ref.includes("narHash=")
+    );
+  }
+
   function flakeSelectorLookupExpression(selector) {
     const nixList = `[ ${selector.map((part) => nixString(part)).join(" ")} ]`;
     return `(builtins.foldl' (
@@ -396,8 +404,15 @@ in {
       evaluate: async (request) => {
         const system = request.system || currentSystemRaw();
         window.LibevalWasmFetchConfig = request.fetchProxy || null;
-        const rawResponse = await evalNix(request.expression);
-        if (looksLikePayload(rawResponse)) return rawResponse;
+        const input = String(request.expression || "").trim();
+        const isFlakeRef = looksLikeFlakeRef(input);
+        if (!request.allowFetch && isFlakeRef && isRemoteUnpinnedFlakeRef(input)) {
+          return failure(
+            "Fetch is disabled. Enable Allow fetch or provide a pinned flake URI with narHash.",
+          );
+        }
+        const rawResponse = isFlakeRef ? null : await evalNix(request.expression);
+        if (rawResponse && looksLikePayload(rawResponse)) return rawResponse;
         const wrappedResponse = await evalNix(browserModuleExpression(request.expression, system));
         if (wrappedResponse && wrappedResponse.ok === false) return wrappedResponse;
         if (looksLikePayload(wrappedResponse)) return wrappedResponse;

@@ -123,7 +123,7 @@ button:active {
   padding: 2px 4px;
 }
 
-.fetch-input {
+.toolbar .fetch-input {
   width: 14px;
   height: 14px;
   align-self: center;
@@ -170,7 +170,7 @@ input {
   color: var(--ink);
 }
 
-textarea {
+.expression-row > textarea {
   grid-column: 2;
   grid-row: 1;
   width: 100%;
@@ -189,8 +189,13 @@ textarea {
   grid-column: 2;
 }
 
-.fetch-input {
+.expression-row > .fetch-input {
   grid-column: 2;
+  justify-self: start;
+  align-self: center;
+  width: 14px;
+  height: 14px;
+  margin: 0;
 }
 
 .standalone-network-row {
@@ -219,6 +224,14 @@ textarea {
 .standalone-network-row > input,
 .standalone-network-row > textarea {
   grid-column: 2;
+}
+
+.standalone-network-row > input[type="checkbox"] {
+  justify-self: start;
+  align-self: center;
+  width: 14px;
+  height: 14px;
+  margin: 0;
 }
 
 .proxy-url-input {
@@ -649,7 +662,7 @@ pre {
   .system-label,
   .system-input,
   .fetch-label,
-  .fetch-input,
+  .expression-row > .fetch-input,
   .standalone-network-row > label,
   .standalone-network-row > input,
   .standalone-network-row > textarea {
