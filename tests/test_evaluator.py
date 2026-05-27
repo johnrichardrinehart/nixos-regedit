@@ -8,7 +8,6 @@ from pathlib import Path
 
 from nixos_regedit.evaluator import (
     REPO_ROOT,
-    TARBALL_TTL_SECONDS,
     EvaluationFailure,
     EvaluationRequest,
     build_command,
@@ -36,18 +35,18 @@ class EvaluatorUnitTests(unittest.TestCase):
         )
 
     def test_offline_flag_tracks_allow_fetch(self):
-        eval_offline = build_command("1", allow_fetch=False)
-        eval_fetching = build_command("1", allow_fetch=True)
-        metadata_offline = build_flake_metadata_command("github:owner/repo", allow_fetch=False)
-        metadata_fetching = build_flake_metadata_command("github:owner/repo", allow_fetch=True)
-        self.assertIn("--offline", eval_offline)
-        self.assertNotIn("--offline", eval_fetching)
-        self.assertIn("--offline", metadata_offline)
-        self.assertNotIn("--offline", metadata_fetching)
-        for command in [eval_offline, eval_fetching, metadata_offline, metadata_fetching]:
-            self.assertIn("--option", command)
-            self.assertIn("tarball-ttl", command)
-            self.assertIn(str(TARBALL_TTL_SECONDS), command)
+        self.assertIn("--offline", build_command("1", allow_fetch=False))
+        self.assertNotIn("--offline", build_command("1", allow_fetch=True))
+        self.assertIn(
+            "--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=False)
+        )
+        self.assertNotIn(
+            "--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=True)
+        )
+        self.assertNotIn("tarball-ttl", build_command("1", allow_fetch=True))
+        self.assertNotIn(
+            "tarball-ttl", build_flake_metadata_command("github:owner/repo", allow_fetch=True)
+        )
 
     def test_resolve_expression_identity_without_flake_metadata(self):
         result = resolve_payload({"expression": "{ default = {}; }", "system": "x86_64-linux"})

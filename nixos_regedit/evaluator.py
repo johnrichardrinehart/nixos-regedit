@@ -38,7 +38,6 @@ DEFAULT_FLAKE_SELECTOR = "nixosModules.default"
 MISSING_DEFAULT_SELECTOR_MARKER = "__NIXOS_REGEDIT_MISSING_DEFAULT_SELECTOR__"
 MISSING_NIXOS_SYSTEM_MARKER = "__NIXOS_REGEDIT_MISSING_NIXOS_SYSTEM__"
 MISSING_MODULE_LIST_MARKER = "__NIXOS_REGEDIT_MISSING_MODULE_LIST__"
-TARBALL_TTL_SECONDS = 900
 
 
 def self_flake_ref() -> str:
@@ -90,9 +89,6 @@ def build_command(nix_expr: str, allow_fetch: bool) -> list[str]:
         "nix",
         "--extra-experimental-features",
         "nix-command flakes",
-        "--option",
-        "tarball-ttl",
-        str(TARBALL_TTL_SECONDS),
         "eval",
         "--json",
         "--impure",
@@ -120,9 +116,6 @@ def build_flake_metadata_command(ref: str, allow_fetch: bool) -> list[str]:
         "nix",
         "--extra-experimental-features",
         "nix-command flakes",
-        "--option",
-        "tarball-ttl",
-        str(TARBALL_TTL_SECONDS),
     ]
     if not allow_fetch:
         command.append("--offline")
