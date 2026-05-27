@@ -1,5 +1,7 @@
 # NixOS Regedit
 
+![NixOS Regedit showing github:nixos/nixpkgs at services.nginx.virtualHosts.<name>.locations.<name>.proxyPass](docs/assets/nixos-regedit-nixpkgs-proxy-pass.png)
+
 Single-page browser for NixOS module options, presented with a Registry Editor-style interface.
 
 Build it with:
