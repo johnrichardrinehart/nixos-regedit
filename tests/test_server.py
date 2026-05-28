@@ -61,6 +61,10 @@ class ServerTests(unittest.TestCase):
         html = backend_index(initial_expression="github:nixos/nixpkgs").decode("utf-8")
         self.assertIn(">github:nixos/nixpkgs</textarea>", html)
 
+    def test_backend_index_can_render_revision(self):
+        html = backend_index(revision="rev test123").decode("utf-8")
+        self.assertIn(">rev test123</span>", html)
+
     def test_backend_cli_defaults_to_localhost_dynamic_port(self):
         with unittest.mock.patch("nixos_regedit.server.build_server") as build_server:
             with unittest.mock.patch("nixos_regedit.server.open_browser") as open_browser:

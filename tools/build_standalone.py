@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html as html_lib
 import json
 import re
 from pathlib import Path
@@ -54,6 +55,7 @@ def main() -> int:
     parser.add_argument("--static-dir", required=True, type=Path)
     parser.add_argument("--evaluator-js", type=Path)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--revision", default="rev dev")
     args = parser.parse_args()
 
     static_dir = args.static_dir
@@ -62,6 +64,10 @@ def main() -> int:
     js = static_dir.joinpath("app.js").read_text(encoding="utf-8")
     loader = static_dir.joinpath("evaluator-loader.js").read_text(encoding="utf-8")
     evaluator_js = args.evaluator_js.read_text(encoding="utf-8") if args.evaluator_js else None
+    html = html.replace(
+        '<span id="revisionText">rev dev</span>',
+        f'<span id="revisionText">{html_lib.escape(args.revision)}</span>',
+    )
 
     html = inline_asset(
         html,

@@ -663,7 +663,7 @@ pre {
 .statusbar {
   grid-row: 9;
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 4px;
   padding: 2px;
   background: var(--face);
@@ -677,9 +677,20 @@ pre {
   padding: 0 4px;
   border: 1px solid;
   border-color: var(--dark) var(--light) var(--light) var(--dark);
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+#revisionText {
+  justify-content: center;
+  text-align: center;
+}
+
+#countText {
+  justify-content: flex-end;
+  text-align: right;
 }
 
 @media (max-width: 820px) {

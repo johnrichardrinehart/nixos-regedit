@@ -75,3 +75,21 @@ expression to a JSON string.
 
 NixOS Regedit consumes this package when building the standalone HTML bundle.
 See `docs/libeval-wasm.md` for the ABI and storage integration notes.
+
+## License
+
+MIT.
+
+### Generated-code note
+
+This project was developed with OpenAI's Codex CLI. OpenAI's public terms and
+help-center guidance state that, as between you and OpenAI, you own generated
+output to the extent permitted by law, and that OpenAI does not claim ownership
+of API-generated output. That means the project can be published under MIT, while
+still requiring the usual care for any vendored code, upstream notices, or
+third-party assets.
+
+Sources:
+
+- <https://openai.com/policies/terms-of-use/>
+- <https://help.openai.com/en/articles/5008634-who-owns-the-output-created-by-chatgpt>

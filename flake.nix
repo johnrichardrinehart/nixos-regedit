@@ -25,11 +25,16 @@
       systems = [
         "x86_64-linux"
       ];
+      revision = self.rev or self.dirtyRev or "unknown";
+      revisionLabel = "rev ${
+        if revision == "unknown" then revision else builtins.substring 0 12 revision
+      }";
       projectFileset = fs.unions [
         ./.clang-format
         ./.envrc
         ./.github
         ./.gitignore
+        ./LICENSE
         ./README.md
         ./docs
         ./flake.lock
@@ -169,6 +174,7 @@
                 --prefix PYTHONPATH : "$out/lib/nixos-regedit" \
                 --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nix ]} \
                 --set NIX_PATH nixpkgs=${nixpkgs} \
+                --set NIXOS_REGEDIT_REVISION ${pkgs.lib.escapeShellArg revisionLabel} \
                 --set NIXOS_REGEDIT_FLAKE_REF path:${supportFlakeSource}
               runHook postInstall
             '';
@@ -185,6 +191,7 @@
               python tools/build_standalone.py \
                 --static-dir nixos_regedit/static \
                 --evaluator-js ${self.packages.${system}.libeval-wasm}/share/libeval-wasm/libeval.js \
+                --revision ${pkgs.lib.escapeShellArg revisionLabel} \
                 --out $out/share/nixos-regedit/index.html
               mkdir -p $out/bin
               cat > $out/bin/nixos-regedit <<EOF

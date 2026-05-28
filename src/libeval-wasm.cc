@@ -425,6 +425,14 @@ std::string evaluateToJson(const std::string &expression) {
     setenv("NIX_STATE_DIR", "/persist/state/nix/var/nix", 1);
     setenv("NIX_LOG_DIR", "/persist/state/nix/var/log/nix", 1);
     setenv("NIX_STORE_DIR", "/nix/store", 1);
+    // Browser builds cannot run Nix's thread-backed binary-substitution worker.
+    // Source fetches still go through the Emscripten file-transfer shim.
+    setenv("NIX_CONFIG",
+           "tarball-ttl = 900\n"
+           "substitute = false\n"
+           "substituters =\n"
+           "trusted-public-keys =\n",
+           1);
 
     OwnedContext ctx;
     if (!ctx.ptr)
@@ -434,6 +442,11 @@ std::string evaluateToJson(const std::string &expression) {
     if (!ok(ctx.ptr, nix_libutil_init(ctx.ptr), error, "initializing Nix utilities"))
         return failure(error);
     if (!ok(ctx.ptr, nix_set_verbosity(ctx.ptr, NIX_LVL_DEBUG), error, "enabling debug logging"))
+        return failure(error);
+    if (!ok(ctx.ptr, nix_setting_set(ctx.ptr, "substitute", "false"), error,
+            "disabling binary substitution"))
+        return failure(error);
+    if (!ok(ctx.ptr, nix_setting_set(ctx.ptr, "substituters", ""), error, "disabling substituters"))
         return failure(error);
     if (!ok(ctx.ptr, nix_setting_set(ctx.ptr, "extra-experimental-features", "nix-command flakes"),
             error, "enabling flakes"))

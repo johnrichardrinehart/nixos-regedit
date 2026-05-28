@@ -32,7 +32,12 @@ MAX_BODY_BYTES = 5 * 1024 * 1024
 Evaluator = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def backend_index(static_dir: Path = STATIC_DIR, *, initial_expression: str = "") -> bytes:
+def backend_index(
+    static_dir: Path = STATIC_DIR,
+    *,
+    initial_expression: str = "",
+    revision: str | None = None,
+) -> bytes:
     html = static_dir.joinpath("index.html").read_text(encoding="utf-8")
     backend_source_help_section = """          <section>
             <h2>Backend sources</h2>
@@ -61,6 +66,11 @@ def backend_index(static_dir: Path = STATIC_DIR, *, initial_expression: str = ""
     html = html.replace(
         '    <script src="evaluator-loader.js"></script>',
         '    <script src="backend-loader.js"></script>',
+    )
+    revision_text = revision or os.environ.get("NIXOS_REGEDIT_REVISION", "rev dev")
+    html = html.replace(
+        '<span id="revisionText">rev dev</span>',
+        f'<span id="revisionText">{html_lib.escape(revision_text)}</span>',
     )
     html = html.replace(
         "      <!-- standalone-network-start -->\n"

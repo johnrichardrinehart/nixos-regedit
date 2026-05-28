@@ -94,6 +94,10 @@ class StaticBundleTests(unittest.TestCase):
         )
         wasm_source = Path("src/libeval-wasm.cc").read_text()
         self.assertNotIn('nix_setting_set(ctx.ptr, "tarball-ttl"', wasm_source)
+        self.assertIn('setenv("NIX_CONFIG"', wasm_source)
+        self.assertIn("substitute = false", wasm_source)
+        self.assertIn('nix_setting_set(ctx.ptr, "substitute", "false")', wasm_source)
+        self.assertIn('nix_setting_set(ctx.ptr, "substituters", "")', wasm_source)
         self.assertIn("processSha256Block", wasm_source)
         self.assertNotIn("std::memset(md, 0, 32)", wasm_source)
         styles = Path("nixos_regedit/static/styles.css").read_text()
@@ -107,6 +111,8 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("overflow-x: hidden", styles)
         self.assertIn(".content.no-matches", styles)
         self.assertIn("grid-row: 9", styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)", styles)
+        self.assertIn("#revisionText", styles)
 
     def test_archive_proxy_worker_is_constrained(self):
         worker = Path("infra/cloudflare/workers/archive-proxy.js").read_text()
@@ -194,10 +200,13 @@ class StaticBundleTests(unittest.TestCase):
                 str(evaluator),
                 "--out",
                 str(out),
+                "--revision",
+                "rev test123",
             ]
             with unittest.mock.patch("sys.argv", argv):
                 self.assertEqual(build_standalone(), 0)
             html = out.read_text()
+            self.assertIn(">rev test123</span>", html)
             self.assertIn("<style>", html)
             self.assertIn("<script>", html)
             self.assertIn("NixOSRegeditStandaloneEvaluatorSource", html)
