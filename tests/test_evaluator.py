@@ -22,8 +22,8 @@ from nixos_regedit.evaluator import (
 )
 
 
-def completed(payload):
-    return subprocess.CompletedProcess(["nix"], 0, json.dumps(payload), "")
+def completed(payload, stderr=""):
+    return subprocess.CompletedProcess(["nix"], 0, json.dumps(payload), stderr)
 
 
 class EvaluatorUnitTests(unittest.TestCase):
@@ -37,6 +37,7 @@ class EvaluatorUnitTests(unittest.TestCase):
     def test_offline_flag_tracks_allow_fetch(self):
         self.assertIn("--offline", build_command("1", allow_fetch=False))
         self.assertNotIn("--offline", build_command("1", allow_fetch=True))
+        self.assertIn("--debug", build_command("1", allow_fetch=False))
         self.assertIn(
             "--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=False)
         )
@@ -129,7 +130,10 @@ class EvaluatorUnitTests(unittest.TestCase):
 
         def runner(command, **kwargs):
             calls.append(command)
-            return completed({"ok": True, "options": {}, "optionCount": 0, "moduleCount": 0})
+            return completed(
+                {"ok": True, "options": {}, "optionCount": 0, "moduleCount": 0},
+                stderr="evaluating file 'demo.nix'\n",
+            )
 
         result = evaluate(
             EvaluationRequest("{ default = {}; }", system="aarch64-linux"), runner=runner
@@ -137,6 +141,8 @@ class EvaluatorUnitTests(unittest.TestCase):
         self.assertEqual(result["mode"], "expression-nixosModules")
         self.assertIn('"aarch64-linux"', calls[0][-1])
         self.assertEqual(len(calls), 1)
+        self.assertEqual(result["debugLog"][0]["source"], "expression-nixosModules:stderr")
+        self.assertIn("evaluating file", result["debugLog"][0]["message"])
 
     def test_module_wrapper_uses_vendored_doc_renderer_and_sliced_lib(self):
         expr = module_collection_expr("{ default = {}; }", "x86_64-linux")

@@ -6,13 +6,16 @@ import json
 import os
 import re
 import subprocess
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+DebugSink = Callable[[dict[str, str]], None]
 
 
 class EvaluationFailure(Exception):
@@ -38,6 +41,7 @@ DEFAULT_FLAKE_SELECTOR = "nixosModules.default"
 MISSING_DEFAULT_SELECTOR_MARKER = "__NIXOS_REGEDIT_MISSING_DEFAULT_SELECTOR__"
 MISSING_NIXOS_SYSTEM_MARKER = "__NIXOS_REGEDIT_MISSING_NIXOS_SYSTEM__"
 MISSING_MODULE_LIST_MARKER = "__NIXOS_REGEDIT_MISSING_MODULE_LIST__"
+DEBUG_LOG_LIMIT = 2000
 
 
 def self_flake_ref() -> str:
@@ -90,6 +94,7 @@ def build_command(nix_expr: str, allow_fetch: bool) -> list[str]:
         "--extra-experimental-features",
         "nix-command flakes",
         "eval",
+        "--debug",
         "--json",
         "--impure",
     ]
@@ -97,6 +102,40 @@ def build_command(nix_expr: str, allow_fetch: bool) -> list[str]:
         command.append("--offline")
     command.extend(["--expr", nix_expr])
     return command
+
+
+def _debug_timestamp() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def debug_entries_from_attempts(attempts: list[dict[str, Any]]) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for attempt in attempts:
+        mode = str(attempt.get("mode") or "nix")
+        for stream in ("stderr", "stdout"):
+            text = attempt.get(stream)
+            if not isinstance(text, str) or not text:
+                continue
+            for line in text.splitlines():
+                if line:
+                    entries.append(
+                        {
+                            "time": _debug_timestamp(),
+                            "source": f"{mode}:{stream}",
+                            "message": line,
+                        }
+                    )
+    if len(entries) > DEBUG_LOG_LIMIT:
+        return entries[-DEBUG_LOG_LIMIT:]
+    return entries
+
+
+def make_debug_entry(source: str, message: str) -> dict[str, str]:
+    return {
+        "time": _debug_timestamp(),
+        "source": source,
+        "message": message,
+    }
 
 
 def run_eval(
@@ -108,6 +147,70 @@ def run_eval(
         text=True,
         capture_output=True,
         timeout=timeout,
+    )
+
+
+def run_command_streaming_debug(
+    command: list[str],
+    *,
+    cwd: str,
+    timeout: int,
+    debug_sink: DebugSink | None,
+    debug_source: str,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    stdout_parts: list[str] = []
+    stderr_lines: list[str] = []
+
+    def read_stdout() -> None:
+        assert process.stdout is not None
+        while True:
+            chunk = process.stdout.read(65536)
+            if chunk == "":
+                break
+            stdout_parts.append(chunk)
+
+    def read_stderr() -> None:
+        assert process.stderr is not None
+        for line in process.stderr:
+            stripped = line.rstrip("\n")
+            stderr_lines.append(stripped)
+            if debug_sink and stripped:
+                debug_sink(make_debug_entry(f"{debug_source}:stderr", stripped))
+
+    stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    try:
+        returncode = process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        returncode = process.wait()
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
+        if process.stdout:
+            process.stdout.close()
+        if process.stderr:
+            process.stderr.close()
+        raise
+    stdout_thread.join(timeout=5)
+    stderr_thread.join(timeout=5)
+    if process.stdout:
+        process.stdout.close()
+    if process.stderr:
+        process.stderr.close()
+    return subprocess.CompletedProcess(
+        command,
+        returncode,
+        "".join(stdout_parts),
+        "\n".join(stderr_lines),
     )
 
 
@@ -559,6 +662,7 @@ def evaluate(
     runner: Runner | None = None,
     cwd: str | None = None,
     timeout: int = 120,
+    debug_sink: DebugSink | None = None,
 ) -> dict[str, Any]:
     runner_provided = runner is not None
     runner = runner or subprocess.run
@@ -579,8 +683,12 @@ def evaluate(
                 timeout=timeout,
             )
         else:
-            completed = run_eval(
-                nix_expr, allow_fetch=request.allow_fetch, cwd=cwd, timeout=timeout
+            completed = run_command_streaming_debug(
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                debug_sink=debug_sink,
+                debug_source=mode,
             )
         attempt = {
             "mode": mode,
@@ -610,6 +718,7 @@ def evaluate(
             }
         )
         result["attempts"] = attempts
+        result["debugLog"] = debug_entries_from_attempts(attempts)
         return result
 
     if looks_like_flake_ref(request.expression):
@@ -713,6 +822,7 @@ def evaluate_payload(
     runner: Runner | None = None,
     cwd: str | None = None,
     timeout: int = 120,
+    debug_sink: DebugSink | None = None,
 ) -> dict[str, Any]:
     request = parse_request(payload)
-    return evaluate(request, runner=runner, cwd=cwd, timeout=timeout)
+    return evaluate(request, runner=runner, cwd=cwd, timeout=timeout, debug_sink=debug_sink)

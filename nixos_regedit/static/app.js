@@ -14,6 +14,8 @@ const state = {
   evaluationInFlight: null,
   filterText: "",
   selectionExplicit: false,
+  debugLog: [],
+  debugLogInput: null,
 };
 
 const CACHE_DB = "nixos-regedit-cache";
@@ -46,6 +48,10 @@ const elements = {
   help: $("helpButton"),
   helpOverlay: $("helpOverlay"),
   helpClose: $("helpCloseButton"),
+  debugLog: $("debugLogButton"),
+  debugLogOverlay: $("debugLogOverlay"),
+  debugLogClose: $("debugLogCloseButton"),
+  debugLogBody: $("debugLogBody"),
   diagnostics: $("diagnostics"),
   content: $("content"),
   tableRegion: $("tableRegion"),
@@ -223,6 +229,87 @@ function openHelp() {
 function closeHelp() {
   elements.helpOverlay.hidden = true;
   elements.help.focus();
+}
+
+function debugEntry(time, source, message) {
+  return {
+    time: time || new Date().toISOString(),
+    source: source || "nixos-regedit",
+    message: String(message || ""),
+  };
+}
+
+function normalizeDebugLog(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .map((entry) => {
+      if (typeof entry === "string") return debugEntry("", "nix", entry);
+      if (!entry || typeof entry !== "object") return null;
+      return debugEntry(entry.time, entry.source, entry.message);
+    })
+    .filter(Boolean);
+}
+
+function debugLogFromAttempts(attempts) {
+  const entries = [];
+  (attempts || []).forEach((attempt) => {
+    const mode = (attempt && attempt.mode) || "nix";
+    ["stderr", "stdout"].forEach((stream) => {
+      const text = attempt && typeof attempt[stream] === "string" ? attempt[stream] : "";
+      text.split(/\r?\n/).forEach((line) => {
+        if (line) entries.push(debugEntry("", `${mode}:${stream}`, line));
+      });
+    });
+  });
+  return entries;
+}
+
+function setDebugLog(entries, input = currentEvaluationInput()) {
+  state.debugLog = normalizeDebugLog(entries);
+  state.debugLogInput = input;
+  if (elements.debugLogOverlay && !elements.debugLogOverlay.hidden) renderDebugLog();
+}
+
+function appendDebugLogEntry(entry, input = state.evaluationInFlight || currentEvaluationInput()) {
+  state.debugLog.push(...normalizeDebugLog([entry]));
+  if (state.debugLog.length > 2000) state.debugLog.splice(0, state.debugLog.length - 2000);
+  state.debugLogInput = input;
+  if (elements.debugLogOverlay && !elements.debugLogOverlay.hidden) renderDebugLog();
+}
+
+function stripDiagnosticControls(text) {
+  return String(text || "").replace(
+    /\u001b\][\s\S]*?(?:\u0007|\u001b\\)|\u001b\[[0-?]*[ -/]*[@-~]/g,
+    "",
+  );
+}
+
+function renderDebugLog() {
+  const lines = state.debugLog.map((entry) => {
+    const prefix = `[${entry.time || "unknown time"}] [${entry.source || "nix"}]`;
+    return `${prefix} ${stripDiagnosticControls(entry.message)}`;
+  });
+  if (lines.length === 0) {
+    lines.push("No debug log entries were captured for the current evaluation.");
+  }
+  if (state.debugLogInput && !sameEvaluationInput(currentEvaluationInput(), state.debugLogInput)) {
+    lines.unshift(
+      `Debug log is from previous input: ${expressionSummary(state.debugLogInput)}`,
+      "",
+    );
+  }
+  elements.debugLogBody.textContent = lines.join("\n");
+}
+
+function openDebugLog() {
+  renderDebugLog();
+  elements.debugLogOverlay.hidden = false;
+  elements.debugLogClose.focus();
+}
+
+function closeDebugLog() {
+  elements.debugLogOverlay.hidden = true;
+  elements.debugLog.focus();
 }
 
 function renderEvaluatedExpression() {
@@ -834,6 +921,21 @@ function renderAll() {
 }
 
 function renderEvaluation(payload, { cached = false, input = currentEvaluationInput() } = {}) {
+  const payloadDebugLog = normalizeDebugLog(payload.debugLog || []);
+  setDebugLog(
+    payloadDebugLog.length > 0
+      ? payloadDebugLog
+      : [
+          debugEntry(
+            "",
+            cached ? "cache" : "evaluator",
+            cached
+              ? "Loaded cached evaluation result; no evaluator debug log was stored with it."
+              : "Evaluation completed without captured debug output.",
+          ),
+        ],
+    input,
+  );
   state.options = payload.options || {};
   state.tree = payload.tree || buildTreeFromOptions(state.options);
   state.lastMode = payload.mode || "";
@@ -894,6 +996,7 @@ async function evaluate() {
     return;
   }
   state.evaluationInFlight = input;
+  setDebugLog([debugEntry("", "ui", `Starting evaluation for ${expressionSummary(input)}`)], input);
   elements.evaluate.disabled = true;
   if (hasVisibleResults() && !sameEvaluationInput(input, state.lastEvaluationInput)) {
     setStatus(
@@ -922,10 +1025,21 @@ async function evaluate() {
       allowFetch,
       system,
       fetchProxy: standaloneFetchConfig(),
+      onDebugLog: (entry) => appendDebugLogEntry(entry, input),
     });
     if (!payload.ok) {
       const attempts = (payload.attempts || []).map(
         (attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`,
+      );
+      const debugLog = normalizeDebugLog(payload.debugLog || []);
+      setDebugLog(
+        debugLog.length > 0
+          ? debugLog
+          : [
+              ...debugLogFromAttempts(payload.attempts),
+              debugEntry("", "evaluator", payload.error || "Evaluation failed"),
+            ],
+        input,
       );
       resetResults();
       showDiagnostics([payload.error, ...attempts]);
@@ -935,6 +1049,7 @@ async function evaluate() {
     if (cacheKey) await cachePut(cacheKey, payload);
     renderEvaluation(payload, { input });
   } catch (error) {
+    setDebugLog([debugEntry("", "ui", requestFailureMessage(error)), ...state.debugLog], input);
     resetResults();
     showDiagnostics([requestFailureMessage(error)]);
     setStatus("Evaluation failed");
@@ -1079,10 +1194,18 @@ elements.helpClose.addEventListener("click", closeHelp);
 elements.helpOverlay.addEventListener("click", (event) => {
   if (event.target === elements.helpOverlay) closeHelp();
 });
+elements.debugLog.addEventListener("click", openDebugLog);
+elements.debugLogClose.addEventListener("click", closeDebugLog);
+elements.debugLogOverlay.addEventListener("click", (event) => {
+  if (event.target === elements.debugLogOverlay) closeDebugLog();
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.helpOverlay.hidden) {
     event.preventDefault();
     closeHelp();
+  } else if (event.key === "Escape" && !elements.debugLogOverlay.hidden) {
+    event.preventDefault();
+    closeDebugLog();
   }
 });
 

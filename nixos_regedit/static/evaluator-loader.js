@@ -338,6 +338,24 @@ in {
     return /NAR hash mismatch|got 'sha256-[^']+'|expected 'sha256-[^']+'/i.test(message);
   }
 
+  function appendDebugLog(debugLog, source, message) {
+    debugLog.push({
+      time: new Date().toISOString(),
+      source: source || "libeval-wasm",
+      message: String(message || ""),
+    });
+    if (debugLog.length > 2000) debugLog.splice(0, debugLog.length - 2000);
+  }
+
+  function attachDebugLog(response, debugLog) {
+    const payload =
+      response && typeof response === "object"
+        ? response
+        : failure("Evaluator did not return a response object.");
+    const existing = Array.isArray(payload.debugLog) ? payload.debugLog : [];
+    return { ...payload, debugLog: [...debugLog, ...existing] };
+  }
+
   async function preparePersistentStorage(module) {
     if (!module.FS) return { enabled: false, reason: "Emscripten FS is unavailable" };
 
@@ -435,12 +453,25 @@ ${syncfs.toString()}
 ${removeTree.toString()}
 ${clearNixFetchCache.toString()}
 ${shouldRetryAfterClearingFetchCache.toString()}
+${appendDebugLog.toString()}
+${attachDebugLog.toString()}
 ${preparePersistentStorage.toString()}
 
 let modulePromise = null;
 let evaluateRaw = null;
 let currentSystemRaw = null;
 let storage = null;
+let currentDebugLog = [];
+let currentDebugRequestId = null;
+
+function appendWorkerDebugLog(source, message) {
+  const before = currentDebugLog.length;
+  appendDebugLog(currentDebugLog, source, message);
+  const entry = currentDebugLog[currentDebugLog.length - 1];
+  if (currentDebugRequestId !== null && currentDebugLog.length >= before && entry) {
+    self.postMessage({ id: currentDebugRequestId, ok: true, debug: true, entry });
+  }
+}
 
 async function moduleInstance() {
   if (!modulePromise) {
@@ -449,10 +480,15 @@ async function moduleInstance() {
       if (typeof createLibevalWasm !== "function") {
         throw new Error("libeval-wasm did not expose createLibevalWasm.");
       }
-      const module = await createLibevalWasm();
+      appendWorkerDebugLog("worker", "loading libeval-wasm module");
+      const module = await createLibevalWasm({
+        print: (line) => appendWorkerDebugLog("stdout", line),
+        printErr: (line) => appendWorkerDebugLog("stderr", line),
+      });
       storage = await preparePersistentStorage(module);
       evaluateRaw = module.cwrap("libeval_wasm", "string", ["string"]);
       currentSystemRaw = module.cwrap("libeval_wasm_current_system", "string", []);
+      appendWorkerDebugLog("worker", "libeval-wasm module ready");
       return module;
     })();
   }
@@ -461,7 +497,12 @@ async function moduleInstance() {
 
 async function evalNix(expression) {
   const module = await moduleInstance();
+  appendWorkerDebugLog("libeval-wasm", "evaluating expression");
   const response = JSON.parse(evaluateRaw(expression));
+  appendWorkerDebugLog(
+    "libeval-wasm",
+    response && response.ok === false ? "evaluation returned failure" : "evaluation returned result",
+  );
   await syncfs(module, false);
   return response;
 }
@@ -504,6 +545,8 @@ async function resolve(request) {
 }
 
 async function evaluate(request) {
+  currentDebugLog = [];
+  appendWorkerDebugLog("worker", "starting evaluation request");
   const system = request.system || await currentSystem();
   self.LibevalWasmFetchConfig = {
     ...(request.fetchProxy || {}),
@@ -512,18 +555,26 @@ async function evaluate(request) {
   const input = String(request.expression || "").trim();
   const isFlakeRef = looksLikeFlakeRef(input);
   if (!request.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
-    return failure("Fetch is disabled. Enable Allow fetch to use remote flake references.");
+    return attachDebugLog(
+      failure("Fetch is disabled. Enable Allow fetch to use remote flake references."),
+      currentDebugLog,
+    );
   }
   const rawResponse = isFlakeRef ? null : await evalNixRetryingFetchCacheMismatch(request.expression);
-  if (rawResponse && looksLikePayload(rawResponse)) return rawResponse;
+  if (rawResponse && looksLikePayload(rawResponse)) return attachDebugLog(rawResponse, currentDebugLog);
   const wrappedResponse = await evalNixRetryingFetchCacheMismatch(
     browserModuleExpression(request.expression, system),
   );
-  if (wrappedResponse && wrappedResponse.ok === false) return wrappedResponse;
-  if (looksLikePayload(wrappedResponse)) return wrappedResponse;
-  if (rawResponse && rawResponse.ok === false) return rawResponse;
-  return failure(
-    "libeval-wasm ran the Nix expression, but it did not return a NixOS module, module list, nixosModules attrset, or NixOS Regedit payload.",
+  if (wrappedResponse && wrappedResponse.ok === false) {
+    return attachDebugLog(wrappedResponse, currentDebugLog);
+  }
+  if (looksLikePayload(wrappedResponse)) return attachDebugLog(wrappedResponse, currentDebugLog);
+  if (rawResponse && rawResponse.ok === false) return attachDebugLog(rawResponse, currentDebugLog);
+  return attachDebugLog(
+    failure(
+      "libeval-wasm ran the Nix expression, but it did not return a NixOS module, module list, nixosModules attrset, or NixOS Regedit payload.",
+    ),
+    currentDebugLog,
   );
 }
 
@@ -539,7 +590,12 @@ self.addEventListener("message", async (event) => {
     } else if (method === "resolve") {
       value = await resolve(request || {});
     } else if (method === "evaluate") {
-      value = await evaluate(request || {});
+      currentDebugRequestId = id;
+      try {
+        value = await evaluate(request || {});
+      } finally {
+        currentDebugRequestId = null;
+      }
     } else {
       throw new Error("Unknown evaluator worker method: " + method);
     }
@@ -568,9 +624,13 @@ self.addEventListener("message", async (event) => {
     const pending = new Map();
 
     worker.addEventListener("message", (event) => {
-      const { id, ok, value, error } = event.data || {};
+      const { id, ok, value, error, debug, entry } = event.data || {};
       const deferred = pending.get(id);
       if (!deferred) return;
+      if (debug) {
+        if (typeof deferred.onDebugLog === "function") deferred.onDebugLog(entry);
+        return;
+      }
       pending.delete(id);
       if (ok) deferred.resolve(value);
       else deferred.reject(new Error(error || "Evaluator worker failed."));
@@ -584,10 +644,10 @@ self.addEventListener("message", async (event) => {
     worker.addEventListener("error", failPending);
     worker.addEventListener("messageerror", failPending);
 
-    const call = (method, request) =>
+    const call = (method, request, onDebugLog) =>
       new Promise((resolve, reject) => {
         const id = ++nextId;
-        pending.set(id, { resolve, reject });
+        pending.set(id, { resolve, reject, onDebugLog });
         worker.postMessage({ id, method, request });
       });
 
@@ -596,7 +656,10 @@ self.addEventListener("message", async (event) => {
       storage: initialized.storage,
       currentSystem: async () => call("currentSystem"),
       resolve: async (request) => call("resolve", request),
-      evaluate: async (request) => call("evaluate", request),
+      evaluate: async (request) => {
+        const { onDebugLog, ...serializableRequest } = request || {};
+        return call("evaluate", serializableRequest, onDebugLog);
+      },
     };
     window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-ready"));
     return true;
@@ -610,12 +673,32 @@ self.addEventListener("message", async (event) => {
 
     const createEvaluator = window.createLibevalWasm;
     if (typeof createEvaluator !== "function") return false;
-    const module = await createEvaluator();
+    let currentDebugLog = [];
+    let currentDebugSink = null;
+    const appendLocalDebugLog = (source, message) => {
+      const before = currentDebugLog.length;
+      appendDebugLog(currentDebugLog, source, message);
+      const entry = currentDebugLog[currentDebugLog.length - 1];
+      if (currentDebugSink && currentDebugLog.length >= before && entry) currentDebugSink(entry);
+    };
+    appendLocalDebugLog("loader", "loading libeval-wasm module");
+    const module = await createEvaluator({
+      print: (line) => appendLocalDebugLog("stdout", line),
+      printErr: (line) => appendLocalDebugLog("stderr", line),
+    });
     const storage = await preparePersistentStorage(module);
     const evaluateRaw = module.cwrap("libeval_wasm", "string", ["string"]);
     const currentSystemRaw = module.cwrap("libeval_wasm_current_system", "string", []);
+    appendLocalDebugLog("loader", "libeval-wasm module ready");
     const evalNix = async (expression) => {
+      appendLocalDebugLog("libeval-wasm", "evaluating expression");
       const response = JSON.parse(evaluateRaw(expression));
+      appendLocalDebugLog(
+        "libeval-wasm",
+        response && response.ok === false
+          ? "evaluation returned failure"
+          : "evaluation returned result",
+      );
       await syncfs(module, false);
       return response;
     };
@@ -652,29 +735,51 @@ self.addEventListener("message", async (event) => {
         };
       },
       evaluate: async (request) => {
-        const system = request.system || currentSystemRaw();
-        window.LibevalWasmFetchConfig = {
-          ...(request.fetchProxy || {}),
-          allowFetch: Boolean(request.allowFetch),
-        };
-        const input = String(request.expression || "").trim();
-        const isFlakeRef = looksLikeFlakeRef(input);
-        if (!request.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
-          return failure("Fetch is disabled. Enable Allow fetch to use remote flake references.");
+        const { onDebugLog, ...serializableRequest } = request || {};
+        currentDebugLog = [];
+        currentDebugSink = typeof onDebugLog === "function" ? onDebugLog : null;
+        try {
+          appendLocalDebugLog("loader", "starting evaluation request");
+          const system = serializableRequest.system || currentSystemRaw();
+          window.LibevalWasmFetchConfig = {
+            ...(serializableRequest.fetchProxy || {}),
+            allowFetch: Boolean(serializableRequest.allowFetch),
+          };
+          const input = String(serializableRequest.expression || "").trim();
+          const isFlakeRef = looksLikeFlakeRef(input);
+          if (!serializableRequest.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
+            return attachDebugLog(
+              failure("Fetch is disabled. Enable Allow fetch to use remote flake references."),
+              currentDebugLog,
+            );
+          }
+          const rawResponse = isFlakeRef
+            ? null
+            : await evalNixRetryingFetchCacheMismatch(serializableRequest.expression);
+          if (rawResponse && looksLikePayload(rawResponse)) {
+            return attachDebugLog(rawResponse, currentDebugLog);
+          }
+          const wrappedResponse = await evalNixRetryingFetchCacheMismatch(
+            browserModuleExpression(serializableRequest.expression, system),
+          );
+          if (wrappedResponse && wrappedResponse.ok === false) {
+            return attachDebugLog(wrappedResponse, currentDebugLog);
+          }
+          if (looksLikePayload(wrappedResponse)) {
+            return attachDebugLog(wrappedResponse, currentDebugLog);
+          }
+          if (rawResponse && rawResponse.ok === false) {
+            return attachDebugLog(rawResponse, currentDebugLog);
+          }
+          return attachDebugLog(
+            failure(
+              "libeval-wasm ran the Nix expression, but it did not return a NixOS module, module list, nixosModules attrset, or NixOS Regedit payload.",
+            ),
+            currentDebugLog,
+          );
+        } finally {
+          currentDebugSink = null;
         }
-        const rawResponse = isFlakeRef
-          ? null
-          : await evalNixRetryingFetchCacheMismatch(request.expression);
-        if (rawResponse && looksLikePayload(rawResponse)) return rawResponse;
-        const wrappedResponse = await evalNixRetryingFetchCacheMismatch(
-          browserModuleExpression(request.expression, system),
-        );
-        if (wrappedResponse && wrappedResponse.ok === false) return wrappedResponse;
-        if (looksLikePayload(wrappedResponse)) return wrappedResponse;
-        if (rawResponse && rawResponse.ok === false) return rawResponse;
-        return failure(
-          "libeval-wasm ran the Nix expression, but it did not return a NixOS module, module list, nixosModules attrset, or NixOS Regedit payload.",
-        );
       },
     };
     window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-ready"));

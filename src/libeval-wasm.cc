@@ -433,6 +433,8 @@ std::string evaluateToJson(const std::string &expression) {
     std::string error;
     if (!ok(ctx.ptr, nix_libutil_init(ctx.ptr), error, "initializing Nix utilities"))
         return failure(error);
+    if (!ok(ctx.ptr, nix_set_verbosity(ctx.ptr, NIX_LVL_DEBUG), error, "enabling debug logging"))
+        return failure(error);
     if (!ok(ctx.ptr, nix_setting_set(ctx.ptr, "extra-experimental-features", "nix-command flakes"),
             error, "enabling flakes"))
         return failure(error);

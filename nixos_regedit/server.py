@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-from .evaluator import EvaluationFailure, current_system, evaluate_payload, resolve_payload
+from .evaluator import (
+    EvaluationFailure,
+    current_system,
+    debug_entries_from_attempts,
+    evaluate_payload,
+    resolve_payload,
+)
 from .tree import build_tree
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -79,6 +85,7 @@ def backend_index(static_dir: Path = STATIC_DIR) -> bytes:
 
 
 def make_handler(static_dir: Path = STATIC_DIR, evaluator: Evaluator | None = None):
+    provided_evaluator = evaluator
     evaluator = evaluator or (lambda payload: evaluate_payload(payload, cwd=os.getcwd()))
 
     class Handler(BaseHTTPRequestHandler):
@@ -97,7 +104,19 @@ def make_handler(static_dir: Path = STATIC_DIR, evaluator: Evaluator | None = No
                 except ValueError as exc:
                     self._json(400, {"ok": False, "error": str(exc), "attempts": []})
                 except EvaluationFailure as exc:
-                    self._json(422, {"ok": False, "error": exc.error, "attempts": exc.attempts})
+                    self._json(
+                        422,
+                        {
+                            "ok": False,
+                            "error": exc.error,
+                            "attempts": exc.attempts,
+                            "debugLog": debug_entries_from_attempts(exc.attempts),
+                        },
+                    )
+                return
+
+            if self.path == "/api/evaluate-stream":
+                self._evaluate_stream()
                 return
 
             if self.path != "/api/evaluate":
@@ -113,7 +132,60 @@ def make_handler(static_dir: Path = STATIC_DIR, evaluator: Evaluator | None = No
             except ValueError as exc:
                 self._json(400, {"ok": False, "error": str(exc), "attempts": []})
             except EvaluationFailure as exc:
-                self._json(422, {"ok": False, "error": exc.error, "attempts": exc.attempts})
+                self._json(
+                    422,
+                    {
+                        "ok": False,
+                        "error": exc.error,
+                        "attempts": exc.attempts,
+                        "debugLog": debug_entries_from_attempts(exc.attempts),
+                    },
+                )
+
+        def _evaluate_stream(self) -> None:
+            try:
+                payload = self._read_json()
+            except ValueError as exc:
+                self._json(400, {"ok": False, "error": str(exc), "attempts": []})
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
+            def write_event(event: dict[str, Any]) -> None:
+                self.wfile.write(json.dumps(event, sort_keys=True).encode("utf-8") + b"\n")
+                self.wfile.flush()
+
+            def debug_sink(entry: dict[str, str]) -> None:
+                write_event({"type": "debug", "entry": entry})
+
+            try:
+                if provided_evaluator is not None:
+                    result = evaluator(payload)
+                else:
+                    result = evaluate_payload(payload, cwd=os.getcwd(), debug_sink=debug_sink)
+                options = result.get("options")
+                if isinstance(options, dict):
+                    result["tree"] = build_tree(options)
+                write_event({"type": "result", "payload": result})
+            except ValueError as exc:
+                write_event(
+                    {"type": "result", "payload": {"ok": False, "error": str(exc), "attempts": []}}
+                )
+            except EvaluationFailure as exc:
+                write_event(
+                    {
+                        "type": "result",
+                        "payload": {
+                            "ok": False,
+                            "error": exc.error,
+                            "attempts": exc.attempts,
+                            "debugLog": debug_entries_from_attempts(exc.attempts),
+                        },
+                    }
+                )
 
         def log_message(self, _format: str, *args: Any) -> None:
             return
