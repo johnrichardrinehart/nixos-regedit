@@ -280,6 +280,24 @@ function normalizeDebugLog(entries) {
     .filter(Boolean);
 }
 
+function formatLocalDebugTime(time) {
+  const date = new Date(time);
+  if (Number.isNaN(date.getTime())) return time || "unknown time";
+  const pad = (value, width = 2) => String(value).padStart(width, "0");
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absOffset = Math.abs(offsetMinutes);
+  const offset = `${sign}${pad(Math.floor(absOffset / 60))}:${pad(absOffset % 60)}`;
+  return [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(
+      date.getMilliseconds(),
+      3,
+    )}`,
+    offset,
+  ].join(" ");
+}
+
 function debugLogFromAttempts(attempts) {
   const entries = [];
   (attempts || []).forEach((attempt) => {
@@ -316,7 +334,7 @@ function stripDiagnosticControls(text) {
 
 function renderDebugLog() {
   const lines = state.debugLog.map((entry) => {
-    const prefix = `[${entry.time || "unknown time"}] [${entry.source || "nix"}]`;
+    const prefix = `[${formatLocalDebugTime(entry.time)}] [${entry.source || "nix"}]`;
     return `${prefix} ${stripDiagnosticControls(entry.message)}`;
   });
   if (lines.length === 0) {
@@ -547,10 +565,22 @@ function browserNetworkFailureHint(message) {
   ].join("\n");
 }
 
+function browserThreadFailureHint(message) {
+  const text = String(message || "");
+  if (!/thread constructor failed:\s*not supported/i.test(text)) return "";
+  return [
+    "Browser evaluator thread failure: Nix tried to start a worker thread in a browser context that does not support it.",
+    "This is usually caused by browser-side store substitution/build worker code. The standalone app disables substituters for new evaluations; reload the page and evaluate again.",
+    "If it persists for this input, use the Python backend app because the local nix command can use the normal OS thread and network stack.",
+  ].join("\n");
+}
+
 function diagnosticMessageParts(message) {
   const cleaned = cleanedDiagnosticText(message);
-  const hint = browserNetworkFailureHint(cleaned);
-  return [hint, cleaned].filter(Boolean);
+  const hints = [browserNetworkFailureHint(cleaned), browserThreadFailureHint(cleaned)].filter(
+    Boolean,
+  );
+  return [...hints, cleaned].filter(Boolean);
 }
 
 function showDiagnostics(messages) {

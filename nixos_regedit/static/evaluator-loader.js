@@ -474,7 +474,7 @@ in {
       module.ENV.NIX_STATE_HOME = "/persist/state/nix";
       module.ENV.NIX_STATE_DIR = "/persist/state/nix/var/nix";
       module.ENV.NIX_LOG_DIR = "/persist/state/nix/var/log/nix";
-      module.ENV.NIX_CONFIG = [module.ENV.NIX_CONFIG, "tarball-ttl = 900"]
+      module.ENV.NIX_CONFIG = [module.ENV.NIX_CONFIG, "tarball-ttl = 900", "substituters ="]
         .filter(Boolean)
         .join("\n");
     }
