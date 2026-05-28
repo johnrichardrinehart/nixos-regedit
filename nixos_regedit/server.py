@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import errno
+import html as html_lib
 import json
 import mimetypes
 import os
+import re
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,8 +30,15 @@ MAX_BODY_BYTES = 5 * 1024 * 1024
 Evaluator = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def backend_index(static_dir: Path = STATIC_DIR) -> bytes:
+def backend_index(static_dir: Path = STATIC_DIR, *, initial_expression: str = "") -> bytes:
     html = static_dir.joinpath("index.html").read_text(encoding="utf-8")
+    backend_source_help_section = """          <section>
+            <h2>Backend sources</h2>
+            <p>
+              The backend uses the local <code>nix</code> command, so source access follows the
+              user's Nix installation and configuration.
+            </p>
+          </section>"""
     standalone_fetch_help = (
         "Sources whose archives are not\n"
         "              CORS-readable from local pages, including GitHub codeload archives, need "
@@ -69,6 +79,11 @@ def backend_index(static_dir: Path = STATIC_DIR) -> bytes:
         "",
     )
     html = html.replace(
+        '        <label class="fetch-label" for="allowFetch">Allow fetch</label>\n'
+        '        <input id="allowFetch" class="fetch-input" type="checkbox" />\n',
+        "",
+    )
+    html = html.replace(
         "The standalone page does not use an HTTP backend. Evaluation requires a compatible\n"
         "              libeval-wasm integration embedded as\n"
         "              <code>window.NixOSRegeditEvaluator</code>.",
@@ -76,15 +91,34 @@ def backend_index(static_dir: Path = STATIC_DIR) -> bytes:
         "              evaluation.",
     )
     html = html.replace(standalone_fetch_help, backend_fetch_help)
+    html = re.sub(
+        r"          <section>\n            <h2>Fetching</h2>[\s\S]*?          </section>",
+        backend_source_help_section,
+        html,
+        count=1,
+    )
     html = html.replace(
         "The standalone netrc field is optional and is used only for proxied archive fetches.\n"
         "              It is never placed in the URL.",
         "No browser archive proxy is used by this backend page.",
     )
+    html = html.replace("<h2>Standalone</h2>", "<h2>Backend</h2>")
+    if initial_expression:
+        html = re.sub(
+            r'(<textarea\s+id="expressionInput"[\s\S]*?>)</textarea>',
+            lambda match: f"{match.group(1)}{html_lib.escape(initial_expression)}</textarea>",
+            html,
+            count=1,
+        )
     return html.encode("utf-8")
 
 
-def make_handler(static_dir: Path = STATIC_DIR, evaluator: Evaluator | None = None):
+def make_handler(
+    static_dir: Path = STATIC_DIR,
+    evaluator: Evaluator | None = None,
+    *,
+    initial_expression: str = "",
+):
     provided_evaluator = evaluator
     evaluator = evaluator or (lambda payload: evaluate_payload(payload, cwd=os.getcwd()))
 
@@ -155,8 +189,13 @@ def make_handler(static_dir: Path = STATIC_DIR, evaluator: Evaluator | None = No
             self.end_headers()
 
             def write_event(event: dict[str, Any]) -> None:
-                self.wfile.write(json.dumps(event, sort_keys=True).encode("utf-8") + b"\n")
-                self.wfile.flush()
+                try:
+                    self.wfile.write(json.dumps(event, sort_keys=True).encode("utf-8") + b"\n")
+                    self.wfile.flush()
+                except OSError as exc:
+                    if exc.errno in (errno.EPIPE, errno.ECONNRESET):
+                        raise ConnectionAbortedError from exc
+                    raise
 
             def debug_sink(entry: dict[str, str]) -> None:
                 write_event({"type": "debug", "entry": entry})
@@ -170,6 +209,8 @@ def make_handler(static_dir: Path = STATIC_DIR, evaluator: Evaluator | None = No
                 if isinstance(options, dict):
                     result["tree"] = build_tree(options)
                 write_event({"type": "result", "payload": result})
+            except ConnectionAbortedError:
+                return
             except ValueError as exc:
                 write_event(
                     {"type": "result", "payload": {"ok": False, "error": str(exc), "attempts": []}}
@@ -209,12 +250,20 @@ def make_handler(static_dir: Path = STATIC_DIR, evaluator: Evaluator | None = No
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except OSError as exc:
+                if exc.errno not in (errno.EPIPE, errno.ECONNRESET):
+                    raise
 
         def _static(self) -> None:
             request_path = unquote(self.path.split("?", 1)[0])
             if request_path in ("", "/"):
-                self._bytes(200, "text/html", backend_index(static_dir))
+                self._bytes(
+                    200,
+                    "text/html",
+                    backend_index(static_dir, initial_expression=initial_expression),
+                )
                 return
 
             relative = request_path.lstrip("/")
@@ -234,22 +283,35 @@ def make_handler(static_dir: Path = STATIC_DIR, evaluator: Evaluator | None = No
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except OSError as exc:
+                if exc.errno not in (errno.EPIPE, errno.ECONNRESET):
+                    raise
 
     return Handler
 
 
-def build_server(host: str, port: int, *, static_dir: Path = STATIC_DIR) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(static_dir))
+def build_server(
+    host: str,
+    port: int,
+    *,
+    static_dir: Path = STATIC_DIR,
+    initial_expression: str = "",
+) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer(
+        (host, port), make_handler(static_dir, initial_expression=initial_expression)
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("expression", nargs="?")
     args = parser.parse_args(argv)
 
-    httpd = build_server(args.host, args.port)
+    httpd = build_server(args.host, args.port, initial_expression=args.expression or "")
     host, port = httpd.server_address
     print(f"nixos-regedit listening on http://{host}:{port}", flush=True)
     try:

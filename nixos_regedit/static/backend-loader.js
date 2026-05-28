@@ -1,4 +1,10 @@
 (function () {
+  window.NixOSRegeditBackend = true;
+
+  function backendRequest(payload) {
+    return { ...payload, allowFetch: true };
+  }
+
   async function responsePayload(response) {
     const text = await response.text();
     if (!text) return {};
@@ -9,20 +15,22 @@
     }
   }
 
-  async function postJson(path, payload) {
+  async function postJson(path, payload, signal) {
     const response = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal,
     });
     return responsePayload(response);
   }
 
-  async function postJsonStream(path, payload, onDebugLog) {
+  async function postJsonStream(path, payload, onDebugLog, signal) {
     const response = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal,
     });
     if (!response.body || typeof response.body.getReader !== "function") {
       return responsePayload(response);
@@ -68,12 +76,14 @@
     },
 
     resolve(payload) {
-      return postJson("/api/resolve", payload);
+      const { signal, onDebugLog, onPhase, ...request } = payload || {};
+      return postJson("/api/resolve", backendRequest(request), signal);
     },
 
     evaluate(payload) {
-      const { onDebugLog, ...request } = payload || {};
-      return postJsonStream("/api/evaluate-stream", request, onDebugLog);
+      const { onDebugLog, onPhase, signal, ...request } = payload || {};
+      if (typeof onPhase === "function") onPhase("Evaluating");
+      return postJsonStream("/api/evaluate-stream", backendRequest(request), onDebugLog, signal);
     },
   };
 

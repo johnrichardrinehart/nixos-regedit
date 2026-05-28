@@ -413,12 +413,25 @@ def flake_ref_expr(
       && flake.inputs.nixpkgs.lib ? nixosSystem
     then flake.inputs.nixpkgs.lib
     else null;
+  flakeNixosSystemSource =
+    if flake ? lib && flake.lib ? nixosSystem
+    then "flake.lib.nixosSystem"
+    else if flake ? inputs
+      && flake.inputs ? nixpkgs
+      && flake.inputs.nixpkgs ? lib
+      && flake.inputs.nixpkgs.lib ? nixosSystem
+    then "flake.inputs.nixpkgs.lib.nixosSystem"
+    else null;
 """,
         modules_path_expr=(
             'if builtins.pathExists flakeModulesPath then flakeModulesPath else "/nixos/modules"'
         ),
         pkgs_expr="flakePkgs",
-        module_source_expr=json.dumps(f"flake attribute .#{selected_path}"),
+        module_source_expr=(
+            "if flakeNixosSystemSource != null "
+            f'then flakeNixosSystemSource + " (modules = .#{selected_path})" '
+            f"else {json.dumps(f'flake attribute .#{selected_path}')}"
+        ),
         nixos_system_options_expr=(
             "if flakeNixosSystemLib != null "
             "then (flakeNixosSystemLib.nixosSystem { system = selectedSystem; "

@@ -90,11 +90,14 @@
       : "null";
     const moduleSourceExpression = selectedFlake
       ? selectedFlake.explicit
-        ? nixString(`flake attribute .#${selectedFlake.selector.join(".")}`)
+        ? `(if nixosSystemSource != null
+            then nixosSystemSource + " (modules = .#${selectedFlake.selector.join(".")})"
+            else "flake attribute .#${selectedFlake.selector.join(".")}")`
         : `(let selected = ${selectedDefault}; in
-            if selected.found then "flake attribute .#nixosModules.default"
-            else if hasFlake && flake ? lib && flake.lib ? nixosSystem then "flake.lib.nixosSystem"
-            else if nixosSystemLib != null then "flake.inputs.nixpkgs.lib.nixosSystem"
+            if selected.found && nixosSystemSource != null
+            then nixosSystemSource + " (modules = .#nixosModules.default)"
+            else if selected.found then "flake attribute .#nixosModules.default"
+            else if nixosSystemSource != null then nixosSystemSource
             else "nixos/modules/module-list.nix")`
       : nixString("input expression");
     return `
@@ -185,6 +188,16 @@ let
       && flake.inputs.nixpkgs.lib ? nixosSystem
     then flake.inputs.nixpkgs.lib
     else null;
+  nixosSystemSource =
+    if hasFlake && flake ? lib && flake.lib ? nixosSystem
+    then "flake.lib.nixosSystem"
+    else if hasFlake
+      && flake ? inputs
+      && flake.inputs ? nixpkgs
+      && flake.inputs.nixpkgs ? lib
+      && flake.inputs.nixpkgs.lib ? nixosSystem
+    then "flake.inputs.nixpkgs.lib.nixosSystem"
+    else null;
   fallbackPkgs = {
     inherit lib;
     stdenv = { hostPlatform = { inherit system; }; };
@@ -239,6 +252,29 @@ let
       let attempted = builtins.tryEval option.\${name};
       in if attempted.success then safeSanitize attempted.value else "<unevaluated>"
     else fallback;
+  relatedPackageName = package:
+    if builtins.isString package then package
+    else if builtins.isList package then concatStringsSep "." package
+    else if builtins.isAttrs package && package ? name then builtins.toString package.name
+    else if builtins.isAttrs package && package ? path then concatStringsSep "." package.path
+    else builtins.toString package;
+  relatedPackageDoc = package:
+    let
+      title =
+        if builtins.isAttrs package && package ? title
+        then builtins.toString package.title + " aka "
+        else "";
+      name = relatedPackageName package;
+      comment =
+        if builtins.isAttrs package && package ? comment
+        then "\\n\\n  " + builtins.toString package.comment
+        else "";
+    in "- [" + title + "\`pkgs." + name + "\`](\\n    https://search.nixos.org/packages?show="
+       + name + "&sort=relevance&query=" + name + "\\n  )" + comment + "\\n";
+  relatedPackagesDoc = packages:
+    if builtins.isList packages && packages != [ ]
+    then concatStringsSep "" (map relatedPackageDoc packages)
+    else null;
   optionPayload = loc: option: {
     declarations = tryField option "declarations" [ "browser-expression" ];
     default = tryField option "defaultText" null;
@@ -246,7 +282,7 @@ let
     example = tryField option "exampleText" null;
     loc = loc;
     readOnly = tryField option "readOnly" false;
-    relatedPackages = null;
+    relatedPackages = relatedPackagesDoc (tryField option "relatedPackages" []);
     type =
       let attempted = builtins.tryEval (option.type or lib.types.anything);
       in if attempted.success then typeName attempted.value else "<unevaluated>";
@@ -464,6 +500,12 @@ let storage = null;
 let currentDebugLog = [];
 let currentDebugRequestId = null;
 
+function emitPhase(phase) {
+  if (currentDebugRequestId !== null) {
+    self.postMessage({ id: currentDebugRequestId, ok: true, phase });
+  }
+}
+
 function appendWorkerDebugLog(source, message) {
   const before = currentDebugLog.length;
   appendDebugLog(currentDebugLog, source, message);
@@ -497,6 +539,7 @@ async function moduleInstance() {
 
 async function evalNix(expression) {
   const module = await moduleInstance();
+  emitPhase("Evaluating");
   appendWorkerDebugLog("libeval-wasm", "evaluating expression");
   const response = JSON.parse(evaluateRaw(expression));
   appendWorkerDebugLog(
@@ -547,6 +590,7 @@ async function resolve(request) {
 async function evaluate(request) {
   currentDebugLog = [];
   appendWorkerDebugLog("worker", "starting evaluation request");
+  emitPhase("Evaluating");
   const system = request.system || await currentSystem();
   self.LibevalWasmFetchConfig = {
     ...(request.fetchProxy || {}),
@@ -560,6 +604,7 @@ async function evaluate(request) {
       currentDebugLog,
     );
   }
+  if (isFlakeRef && request.allowFetch) emitPhase("Fetching");
   const rawResponse = isFlakeRef ? null : await evalNixRetryingFetchCacheMismatch(request.expression);
   if (rawResponse && looksLikePayload(rawResponse)) return attachDebugLog(rawResponse, currentDebugLog);
   const wrappedResponse = await evalNixRetryingFetchCacheMismatch(
@@ -616,51 +661,82 @@ self.addEventListener("message", async (event) => {
       return false;
     }
 
-    const url = URL.createObjectURL(
-      new Blob([workerSource(evaluatorSource)], { type: "text/javascript" }),
-    );
-    const worker = new Worker(url, { name: "nixos-regedit-libeval-wasm" });
+    const workerScript = new Blob([workerSource(evaluatorSource)], { type: "text/javascript" });
+    const url = URL.createObjectURL(workerScript);
+    let worker = null;
+    let ready = null;
     let nextId = 0;
     const pending = new Map();
 
-    worker.addEventListener("message", (event) => {
-      const { id, ok, value, error, debug, entry } = event.data || {};
-      const deferred = pending.get(id);
-      if (!deferred) return;
-      if (debug) {
-        if (typeof deferred.onDebugLog === "function") deferred.onDebugLog(entry);
-        return;
-      }
-      pending.delete(id);
-      if (ok) deferred.resolve(value);
-      else deferred.reject(new Error(error || "Evaluator worker failed."));
-    });
+    const attachWorkerHandlers = (activeWorker) => {
+      activeWorker.addEventListener("message", (event) => {
+        const { id, ok, value, error, debug, entry, phase } = event.data || {};
+        const deferred = pending.get(id);
+        if (!deferred) return;
+        if (debug) {
+          if (typeof deferred.onDebugLog === "function") deferred.onDebugLog(entry);
+          return;
+        }
+        if (phase) {
+          if (typeof deferred.onPhase === "function") deferred.onPhase(phase);
+          return;
+        }
+        pending.delete(id);
+        if (ok) deferred.resolve(value);
+        else deferred.reject(new Error(error || "Evaluator worker failed."));
+      });
+
+      activeWorker.addEventListener("error", failPending);
+      activeWorker.addEventListener("messageerror", failPending);
+    };
 
     const failPending = (error) => {
-      const detail = error && error.message ? error.message : String(error);
+      const detail = error && error.message ? error.message : String(error || "cancelled");
       for (const deferred of pending.values()) deferred.reject(new Error(detail));
       pending.clear();
     };
-    worker.addEventListener("error", failPending);
-    worker.addEventListener("messageerror", failPending);
 
-    const call = (method, request, onDebugLog) =>
+    const call = (method, request, onDebugLog, onPhase) =>
       new Promise((resolve, reject) => {
         const id = ++nextId;
-        pending.set(id, { resolve, reject, onDebugLog });
+        pending.set(id, { resolve, reject, onDebugLog, onPhase });
         worker.postMessage({ id, method, request });
       });
 
-    const initialized = await call("init");
-    window.NixOSRegeditEvaluator = {
+    const spawnWorker = () => {
+      worker = new Worker(url, { name: "nixos-regedit-libeval-wasm" });
+      attachWorkerHandlers(worker);
+      ready = call("init");
+      return ready;
+    };
+
+    const initialized = await spawnWorker();
+    const api = {
       storage: initialized.storage,
-      currentSystem: async () => call("currentSystem"),
-      resolve: async (request) => call("resolve", request),
+      currentSystem: async () => {
+        await ready;
+        return call("currentSystem");
+      },
+      resolve: async (request) => {
+        const { signal, onDebugLog, onPhase, ...serializableRequest } = request || {};
+        await ready;
+        return call("resolve", serializableRequest, onDebugLog, onPhase);
+      },
       evaluate: async (request) => {
-        const { onDebugLog, ...serializableRequest } = request || {};
-        return call("evaluate", serializableRequest, onDebugLog);
+        const { signal, onDebugLog, onPhase, ...serializableRequest } = request || {};
+        await ready;
+        return call("evaluate", serializableRequest, onDebugLog, onPhase);
+      },
+      cancel: () => {
+        if (worker) worker.terminate();
+        failPending(new Error("Evaluation cancelled."));
+        ready = spawnWorker().then((nextInitialized) => {
+          api.storage = nextInitialized.storage;
+          return nextInitialized;
+        });
       },
     };
+    window.NixOSRegeditEvaluator = api;
     window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-ready"));
     return true;
   }
@@ -675,6 +751,11 @@ self.addEventListener("message", async (event) => {
     if (typeof createEvaluator !== "function") return false;
     let currentDebugLog = [];
     let currentDebugSink = null;
+    let cancelled = false;
+    let currentDebugPhase = null;
+    const emitLocalPhase = (phase) => {
+      if (typeof currentDebugPhase === "function") currentDebugPhase(phase);
+    };
     const appendLocalDebugLog = (source, message) => {
       const before = currentDebugLog.length;
       appendDebugLog(currentDebugLog, source, message);
@@ -722,24 +803,28 @@ self.addEventListener("message", async (event) => {
       storage,
       currentSystem: async () => currentSystemRaw(),
       resolve: async (request) => {
-        const input = String(request.expression || "").trim();
+        const { signal, onDebugLog, onPhase, ...serializableRequest } = request || {};
+        const input = String(serializableRequest.expression || "").trim();
         const isFlakeRef = looksLikeFlakeRef(input);
-        if (!request.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
+        if (!serializableRequest.allowFetch && isFlakeRef && isRemoteFlakeRef(input)) {
           return failure("Fetch is disabled. Enable Allow fetch to use remote flake references.");
         }
         return {
           ok: true,
           kind: isFlakeRef ? "flake" : "expression",
           identity: input,
-          system: request.system || currentSystemRaw(),
+          system: serializableRequest.system || currentSystemRaw(),
         };
       },
       evaluate: async (request) => {
-        const { onDebugLog, ...serializableRequest } = request || {};
+        const { signal, onDebugLog, onPhase, ...serializableRequest } = request || {};
         currentDebugLog = [];
         currentDebugSink = typeof onDebugLog === "function" ? onDebugLog : null;
+        currentDebugPhase = typeof onPhase === "function" ? onPhase : null;
+        cancelled = false;
         try {
           appendLocalDebugLog("loader", "starting evaluation request");
+          emitLocalPhase("Evaluating");
           const system = serializableRequest.system || currentSystemRaw();
           window.LibevalWasmFetchConfig = {
             ...(serializableRequest.fetchProxy || {}),
@@ -753,15 +838,18 @@ self.addEventListener("message", async (event) => {
               currentDebugLog,
             );
           }
+          if (isFlakeRef && serializableRequest.allowFetch) emitLocalPhase("Fetching");
           const rawResponse = isFlakeRef
             ? null
             : await evalNixRetryingFetchCacheMismatch(serializableRequest.expression);
+          if (cancelled) throw new Error("Evaluation cancelled.");
           if (rawResponse && looksLikePayload(rawResponse)) {
             return attachDebugLog(rawResponse, currentDebugLog);
           }
           const wrappedResponse = await evalNixRetryingFetchCacheMismatch(
             browserModuleExpression(serializableRequest.expression, system),
           );
+          if (cancelled) throw new Error("Evaluation cancelled.");
           if (wrappedResponse && wrappedResponse.ok === false) {
             return attachDebugLog(wrappedResponse, currentDebugLog);
           }
@@ -779,7 +867,11 @@ self.addEventListener("message", async (event) => {
           );
         } finally {
           currentDebugSink = null;
+          currentDebugPhase = null;
         }
+      },
+      cancel: () => {
+        cancelled = true;
       },
     };
     window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-ready"));

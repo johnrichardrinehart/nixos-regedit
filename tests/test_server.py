@@ -2,11 +2,13 @@ import json
 import tempfile
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+from nixos_regedit import server
 from nixos_regedit.server import backend_index, make_handler
 
 
@@ -45,11 +47,32 @@ class ServerTests(unittest.TestCase):
         self.assertIn('src="backend-loader.js"', html)
         self.assertNotIn('src="libeval-wasm.js"', html)
         self.assertNotIn('src="evaluator-loader.js"', html)
+        self.assertNotIn('id="allowFetch"', html)
+        self.assertNotIn("Allow fetch", html)
+        self.assertNotIn("<h2>Fetching</h2>", html)
         self.assertNotIn('id="standaloneNetworkRow"', html)
         self.assertNotIn('id="proxyUrl"', html)
         self.assertNotIn('id="netrcInput"', html)
         self.assertIn("local Python backend", html)
         self.assertIn("system <code>nix</code>", html)
+        self.assertIn("Backend sources", html)
+
+    def test_backend_index_can_seed_initial_expression(self):
+        html = backend_index(initial_expression="github:nixos/nixpkgs").decode("utf-8")
+        self.assertIn(">github:nixos/nixpkgs</textarea>", html)
+
+    def test_backend_cli_defaults_to_localhost_dynamic_port(self):
+        with unittest.mock.patch("nixos_regedit.server.build_server") as build_server:
+            build_server.return_value.server_address = ("127.0.0.1", 45678)
+            build_server.return_value.serve_forever.side_effect = KeyboardInterrupt
+
+            self.assertEqual(server.main(["github:nixos/nixpkgs"]), 0)
+
+        build_server.assert_called_once_with(
+            "127.0.0.1",
+            0,
+            initial_expression="github:nixos/nixpkgs",
+        )
 
     def test_health_and_static(self):
         base = self.run_server(lambda payload: {"ok": True, "options": {}, "optionCount": 0})

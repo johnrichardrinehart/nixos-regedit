@@ -12,6 +12,8 @@ const state = {
   lastOptionCount: 0,
   lastEvaluationInput: null,
   evaluationInFlight: null,
+  evaluationRunId: 0,
+  evaluationAbortController: null,
   filterText: "",
   selectionExplicit: false,
   debugLog: [],
@@ -20,7 +22,8 @@ const state = {
 
 const CACHE_DB = "nixos-regedit-cache";
 const CACHE_STORE = "evaluations";
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
+const CACHE_TTL_MS = 15 * 60 * 1000;
 const DEFAULT_ARCHIVE_PROXY_URL =
   "https://nixos-regedit-archive-proxy.johnrichardrinehart.workers.dev";
 const NETWORK_CONFIG_STORE = "nixos-regedit-standalone-network";
@@ -68,6 +71,7 @@ let filterTimer = null;
 let evaluatorAvailable = false;
 let evaluatorLoadSettled = Boolean(window.NixOSRegeditEvaluator);
 let standaloneMode = Boolean(window.NixOSRegeditStandalone);
+let initialAutoEvaluateStarted = false;
 
 function loadStandaloneNetworkConfig() {
   standaloneMode = Boolean(window.NixOSRegeditStandalone);
@@ -146,6 +150,13 @@ function refreshEvaluatorAvailability() {
   return evaluatorAvailable;
 }
 
+function maybeAutoEvaluate() {
+  if (initialAutoEvaluateStarted || !evaluatorAvailable || !elements.expression.value.trim())
+    return;
+  initialAutoEvaluateStarted = true;
+  evaluate();
+}
+
 async function defaultSystem() {
   try {
     const evaluator = regeditEvaluator();
@@ -185,7 +196,9 @@ function loadUrlState() {
     elements.filter.value = filter;
     state.filterText = filter.trim();
   }
-  if (fetchMode !== null) elements.allowFetch.checked = fetchMode === "1" || fetchMode === "true";
+  if (fetchMode !== null && elements.allowFetch) {
+    elements.allowFetch.checked = fetchMode === "1" || fetchMode === "true";
+  }
 }
 
 function updateUrlState() {
@@ -196,7 +209,7 @@ function updateUrlState() {
   if (expression) params.set("expression", expression);
   if (system) params.set("system", system);
   if (filter) params.set("filter", filter);
-  if (elements.allowFetch.checked) params.set("fetch", "1");
+  if (elements.allowFetch && elements.allowFetch.checked) params.set("fetch", "1");
   if (
     state.selectionExplicit &&
     state.selectedOptionKey &&
@@ -365,7 +378,9 @@ function currentEvaluationInput() {
   return {
     expression: elements.expression.value.trim(),
     system: elements.system.value.trim(),
-    allowFetch: elements.allowFetch.checked,
+    allowFetch: Boolean(
+      window.NixOSRegeditBackend || (elements.allowFetch && elements.allowFetch.checked),
+    ),
   };
 }
 
@@ -387,6 +402,16 @@ function expressionSummary(input) {
   return text.length > 80 ? `${text.slice(0, 77)}...` : text;
 }
 
+function setEvaluationPhase(phase, input = currentEvaluationInput()) {
+  setStatus(`${phase} ${expressionSummary(input)}`);
+}
+
+function abortActiveEvaluation() {
+  if (state.evaluationAbortController) state.evaluationAbortController.abort();
+  const evaluator = window.NixOSRegeditEvaluator;
+  if (evaluator && typeof evaluator.cancel === "function") evaluator.cancel();
+}
+
 function hasVisibleResults() {
   return Object.keys(state.options).length > 0;
 }
@@ -404,6 +429,15 @@ function markInputChanged() {
   if (hasVisibleResults() && !sameEvaluationInput(input, state.lastEvaluationInput)) {
     setStatus("Input changed; visible results are from the previous evaluation");
   }
+}
+
+function debugEntryPhase(entry) {
+  const message = String((entry && entry.message) || "");
+  if (/fetch|download|copying path|querying info|obtaining file|unpacking/i.test(message)) {
+    return "Fetching";
+  }
+  if (/evaluating|calling|instantiating/i.test(message)) return "Evaluating";
+  return "";
 }
 
 function appendDiagnosticText(parent, text, classes) {
@@ -548,6 +582,9 @@ function openCacheDb() {
   return new Promise((resolve) => {
     const request = indexedDB.open(CACHE_DB, CACHE_VERSION);
     request.onupgradeneeded = () => {
+      if (request.result.objectStoreNames.contains(CACHE_STORE)) {
+        request.result.deleteObjectStore(CACHE_STORE);
+      }
       request.result.createObjectStore(CACHE_STORE, { keyPath: "key" });
     };
     request.onsuccess = () => resolve(request.result);
@@ -564,13 +601,14 @@ async function cacheKeyFor(identity) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function cacheIdentityFor(expression, allowFetch, system) {
+async function cacheIdentityFor(expression, allowFetch, system, { signal } = {}) {
   const fetchProxy = standaloneFetchConfig();
   const payload = await regeditEvaluator().resolve({
     expression,
     allowFetch,
     system,
     fetchProxy,
+    signal,
   });
   if (!payload.ok) {
     const attempts = (payload.attempts || []).map(
@@ -596,8 +634,22 @@ async function cacheGet(key) {
   const db = await openCacheDb();
   if (!db) return null;
   return new Promise((resolve) => {
-    const request = db.transaction(CACHE_STORE, "readonly").objectStore(CACHE_STORE).get(key);
-    request.onsuccess = () => resolve(request.result ? request.result.payload : null);
+    const transaction = db.transaction(CACHE_STORE, "readwrite");
+    const store = transaction.objectStore(CACHE_STORE);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const record = request.result;
+      if (!record || typeof record.savedAt !== "number") {
+        resolve(null);
+        return;
+      }
+      if (Date.now() - record.savedAt > CACHE_TTL_MS) {
+        store.delete(key);
+        resolve(null);
+        return;
+      }
+      resolve(record.payload || null);
+    };
     request.onerror = () => resolve(null);
   });
 }
@@ -782,6 +834,40 @@ function rowData(option) {
   return formatData(option.default ?? option.example ?? "");
 }
 
+function renderRelatedPackages(value) {
+  if (!value || (Array.isArray(value) && value.length === 0)) return null;
+  const text = formatData(value).trim();
+  if (!text || text === "[]") return null;
+
+  const container = document.createElement("div");
+  container.className = "related-packages";
+  const pattern = /- \[([^\]]+)\]\(\s*([^)]+?)\s*\)(?:\n\n\s*([^\n]+))?/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const item = document.createElement("div");
+    item.className = "related-package";
+    const link = document.createElement("a");
+    link.href = match[2].replace(/\s+/g, "");
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = match[1].replace(/`/g, "");
+    item.append(link);
+    if (match[3]) {
+      const comment = document.createElement("span");
+      comment.textContent = ` ${match[3].trim()}`;
+      item.append(comment);
+    }
+    container.append(item);
+  }
+
+  if (container.childNodes.length === 0) {
+    const fallback = document.createElement("pre");
+    fallback.textContent = text;
+    return fallback;
+  }
+  return container;
+}
+
 function renderTree() {
   const tree = visibleTree();
   elements.tree.replaceChildren(...tree.children.map((child) => renderTreeNode(child)));
@@ -896,6 +982,14 @@ function renderDetails() {
     }
     grid.append(labelNode, valueNode);
   };
+  const addNode = (label, node) => {
+    const labelNode = document.createElement("div");
+    labelNode.className = "detail-label";
+    labelNode.textContent = label;
+    const valueNode = document.createElement("div");
+    valueNode.append(node);
+    grid.append(labelNode, valueNode);
+  };
 
   add("Path", key);
   add("Type", option.type || "");
@@ -908,7 +1002,8 @@ function renderDetails() {
     Array.isArray(option.declarations) ? option.declarations.join("\n") : "",
     true,
   );
-  add("Related packages", formatData(option.relatedPackages), true);
+  const relatedPackages = renderRelatedPackages(option.relatedPackages);
+  if (relatedPackages) addNode("Related packages", relatedPackages);
 
   elements.details.replaceChildren(grid);
 }
@@ -970,24 +1065,32 @@ function renderEvaluation(payload, { cached = false, input = currentEvaluationIn
   } else if (parts.length > 0) {
     setStatus(`${filteredEntries(parts).length} matching options${cached ? " (cached)" : ""}`);
   } else {
-    setStatus(`${payload.mode}: ${payload.optionCount} options${cached ? " (cached)" : ""}`);
+    setStatus(
+      `${state.lastModuleSource || payload.mode}: ${payload.optionCount} options${cached ? " (cached)" : ""}`,
+    );
   }
   updateUrlState();
 }
 
-async function evaluate() {
+async function evaluate({ useCache = true, restart = false } = {}) {
   if (!refreshEvaluatorAvailability()) return;
   const input = currentEvaluationInput();
   const expression = input.expression;
   const system = input.system;
   const allowFetch = input.allowFetch;
   if (state.evaluationInFlight) {
-    if (sameEvaluationInput(input, state.evaluationInFlight)) {
-      setStatus(`Already evaluating ${expressionSummary(input)}`);
-    } else {
-      setStatus("Still evaluating previous input; changed input has not been evaluated");
+    if (!restart) {
+      if (sameEvaluationInput(input, state.evaluationInFlight)) {
+        setStatus(`Already evaluating ${expressionSummary(input)}`);
+      } else {
+        setStatus("Input changed while evaluating; click Evaluate to cancel and restart");
+      }
+      return;
     }
-    return;
+    abortActiveEvaluation();
+    state.evaluationInFlight = null;
+    state.evaluationAbortController = null;
+    setStatus(`Cancelling previous evaluation; starting ${expressionSummary(input)}`);
   }
   if (!expression) {
     resetResults();
@@ -995,38 +1098,55 @@ async function evaluate() {
     setStatus("Missing expression");
     return;
   }
+  const runId = state.evaluationRunId + 1;
+  const abortController = new AbortController();
+  state.evaluationRunId = runId;
   state.evaluationInFlight = input;
+  state.evaluationAbortController = abortController;
   setDebugLog([debugEntry("", "ui", `Starting evaluation for ${expressionSummary(input)}`)], input);
-  elements.evaluate.disabled = true;
+  elements.evaluate.disabled = false;
   if (hasVisibleResults() && !sameEvaluationInput(input, state.lastEvaluationInput)) {
-    setStatus(
-      `Evaluating changed input; previous results still shown: ${expressionSummary(input)}`,
-    );
+    setStatus(`Resolving changed input; previous results still shown: ${expressionSummary(input)}`);
   } else {
-    setStatus(`Evaluating ${expressionSummary(input)}`);
+    setEvaluationPhase("Resolving", input);
   }
   showDiagnostics([]);
   try {
-    const cacheIdentity = await cacheIdentityFor(expression, allowFetch, system);
+    const cacheIdentity = await cacheIdentityFor(expression, allowFetch, system, {
+      signal: abortController.signal,
+    });
+    if (runId !== state.evaluationRunId) return;
     state.evaluatedExpression =
       cacheIdentity && cacheIdentity.kind === "flake" ? cacheIdentity.identity : null;
     state.evaluatedExpressionInput = expression;
     const cacheKey = cacheIdentity ? await cacheKeyFor(cacheIdentity) : null;
-    if (cacheKey) {
+    if (runId !== state.evaluationRunId) return;
+    if (useCache && cacheKey) {
       const cached = await cacheGet(cacheKey);
+      if (runId !== state.evaluationRunId) return;
       if (cached) {
         renderEvaluation(cached, { cached: true, input });
         return;
       }
     }
 
+    setEvaluationPhase("Evaluating", input);
     const payload = await regeditEvaluator().evaluate({
       expression,
       allowFetch,
       system,
       fetchProxy: standaloneFetchConfig(),
-      onDebugLog: (entry) => appendDebugLogEntry(entry, input),
+      signal: abortController.signal,
+      onDebugLog: (entry) => {
+        appendDebugLogEntry(entry, input);
+        const phase = debugEntryPhase(entry);
+        if (phase && runId === state.evaluationRunId) setEvaluationPhase(phase, input);
+      },
+      onPhase: (phase) => {
+        if (runId === state.evaluationRunId) setEvaluationPhase(phase, input);
+      },
     });
+    if (runId !== state.evaluationRunId) return;
     if (!payload.ok) {
       const attempts = (payload.attempts || []).map(
         (attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`,
@@ -1047,15 +1167,20 @@ async function evaluate() {
       return;
     }
     if (cacheKey) await cachePut(cacheKey, payload);
+    if (runId !== state.evaluationRunId) return;
     renderEvaluation(payload, { input });
   } catch (error) {
+    if (abortController.signal.aborted || runId !== state.evaluationRunId) return;
     setDebugLog([debugEntry("", "ui", requestFailureMessage(error)), ...state.debugLog], input);
     resetResults();
     showDiagnostics([requestFailureMessage(error)]);
     setStatus("Evaluation failed");
   } finally {
-    state.evaluationInFlight = null;
-    elements.evaluate.disabled = false;
+    if (runId === state.evaluationRunId) {
+      state.evaluationInFlight = null;
+      state.evaluationAbortController = null;
+      elements.evaluate.disabled = false;
+    }
   }
 }
 
@@ -1113,7 +1238,7 @@ function applyFilter() {
   if (parts.length > 0) {
     setStatus(`${filteredEntries(parts).length} matching options`);
   } else if (state.lastMode) {
-    setStatus(`${state.lastMode}: ${state.lastOptionCount} options`);
+    setStatus(`${state.lastModuleSource || state.lastMode}: ${state.lastOptionCount} options`);
   } else {
     setStatus("Ready");
   }
@@ -1127,11 +1252,11 @@ function scheduleFilter() {
   if (pending) setStatus("Filter pending");
 }
 
-elements.evaluate.addEventListener("click", evaluate);
+elements.evaluate.addEventListener("click", () => evaluate({ useCache: false, restart: true }));
 elements.expression.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
-    evaluate();
+    evaluate({ useCache: false, restart: true });
   }
 });
 elements.expression.addEventListener("input", () => {
@@ -1156,10 +1281,12 @@ elements.system.addEventListener("input", () => {
   markInputChanged();
   updateUrlState();
 });
-elements.allowFetch.addEventListener("change", () => {
-  markInputChanged();
-  updateUrlState();
-});
+if (elements.allowFetch) {
+  elements.allowFetch.addEventListener("change", () => {
+    markInputChanged();
+    updateUrlState();
+  });
+}
 if (elements.proxyEnabled) {
   elements.proxyEnabled.addEventListener("change", saveStandaloneNetworkConfig);
   elements.proxyUrl.addEventListener("input", saveStandaloneNetworkConfig);
@@ -1216,7 +1343,8 @@ renderAll();
 refreshEvaluatorAvailability();
 window.addEventListener("nixos-regedit-evaluator-ready", () => {
   evaluatorLoadSettled = true;
-  if (refreshEvaluatorAvailability() && elements.expression.value.trim()) evaluate();
+  refreshEvaluatorAvailability();
+  maybeAutoEvaluate();
 });
 window.addEventListener("nixos-regedit-evaluator-failed", (event) => {
   evaluatorLoadSettled = true;
@@ -1232,5 +1360,5 @@ window.setTimeout(() => {
 
 defaultSystem().then((system) => {
   elements.system.placeholder = system;
-  if (evaluatorAvailable && elements.expression.value.trim()) evaluate();
+  maybeAutoEvaluate();
 });

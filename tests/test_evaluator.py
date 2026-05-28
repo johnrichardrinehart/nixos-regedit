@@ -156,6 +156,7 @@ class EvaluatorUnitTests(unittest.TestCase):
         self.assertIn("support.lib.nixpkgsLib", flake_expr)
         self.assertIn('[ "nixosModules" "default" ]', flake_expr)
         self.assertIn("flake.inputs.nixpkgs.lib ? nixosSystem", flake_expr)
+        self.assertIn("modules = .#nixosModules.default", flake_expr)
         self.assertIn("modules = modules", flake_expr)
         self.assertNotIn("<nixpkgs>", flake_expr)
 
@@ -166,7 +167,7 @@ class EvaluatorUnitTests(unittest.TestCase):
         self.assertNotIn(
             'builtins.getFlake "github:owner/repo/rev?narHash=sha256-test#foo.bar"', selected_expr
         )
-        self.assertIn('moduleSource = "flake attribute .#foo.bar"', selected_expr)
+        self.assertIn("modules = .#foo.bar", selected_expr)
 
         attrset_expr = flake_ref_expr(
             "github:owner/repo/rev?narHash=sha256-test#nixosModules", "x86_64-linux"
@@ -219,11 +220,17 @@ class EvaluatorIntegrationTests(unittest.TestCase):
     def test_expression_single_module(self):
         expr = r"""
         { lib, ... }: {
-          options.demo.single = lib.mkEnableOption "single module";
+          options.demo.single = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "single module";
+            relatedPackages = [ "tmux" ];
+          };
         }
         """
         result = evaluate(EvaluationRequest(textwrap.dedent(expr)), timeout=180)
         self.assertIn("demo.single", result["options"])
+        self.assertIn("pkgs.tmux", result["options"]["demo.single"]["relatedPackages"])
         self.assertNotIn("services.nginx.enable", result["options"])
         self.assertLess(result["optionCount"], 10)
         self.assertEqual(result["mode"], "expression-nixosModules")
