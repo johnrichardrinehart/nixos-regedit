@@ -393,7 +393,16 @@ in {
   }
 
   async function preparePersistentStorage(module) {
-    if (!module.FS) return { enabled: false, reason: "Emscripten FS is unavailable" };
+    const storage = {
+      enabled: false,
+      backend: "MEMFS",
+      mountPoint: "/persist",
+      cacheHome: "/persist/cache",
+      nixCacheHome: "/persist/cache/nix",
+      stateHome: "/persist/state",
+      stateDir: "/persist/state/nix/var/nix",
+    };
+    if (!module.FS) return { ...storage, reason: "Emscripten FS is unavailable" };
 
     mkdirTree(module, "/persist");
     const canUseIdbfs =
@@ -408,13 +417,24 @@ in {
         module.__nixosRegeditPersistentMounted = true;
       } catch (error) {
         const message = String(error && error.message ? error.message : error);
-        if (!message.includes("Mount point is already in use")) throw error;
-        module.__nixosRegeditPersistentMounted = true;
+        if (!message.includes("Mount point is already in use")) {
+          storage.reason = `Persistent browser storage unavailable: ${message}`;
+        } else {
+          module.__nixosRegeditPersistentMounted = true;
+        }
       }
     }
 
     if (module.__nixosRegeditPersistentMounted) {
-      await syncfs(module, true);
+      try {
+        await syncfs(module, true);
+        storage.enabled = true;
+        storage.backend = "IDBFS";
+      } catch (error) {
+        const message = String(error && error.message ? error.message : error);
+        storage.reason = `Persistent browser storage unavailable: ${message}`;
+        module.__nixosRegeditPersistentMounted = false;
+      }
     }
 
     [
@@ -459,16 +479,15 @@ in {
         .join("\n");
     }
 
-    await syncfs(module, false);
-    return {
-      enabled: Boolean(module.__nixosRegeditPersistentMounted),
-      backend: module.__nixosRegeditPersistentMounted ? "IDBFS" : "MEMFS",
-      mountPoint: "/persist",
-      cacheHome: "/persist/cache",
-      nixCacheHome: "/persist/cache/nix",
-      stateHome: "/persist/state",
-      stateDir: "/persist/state/nix/var/nix",
-    };
+    try {
+      await syncfs(module, false);
+    } catch (error) {
+      const message = String(error && error.message ? error.message : error);
+      storage.enabled = false;
+      storage.backend = "MEMFS";
+      storage.reason = `Persistent browser storage unavailable: ${message}`;
+    }
+    return storage;
   }
 
   function workerSource(evaluatorSource) {
@@ -530,7 +549,13 @@ async function moduleInstance() {
       storage = await preparePersistentStorage(module);
       evaluateRaw = module.cwrap("libeval_wasm", "string", ["string"]);
       currentSystemRaw = module.cwrap("libeval_wasm_current_system", "string", []);
-      appendWorkerDebugLog("worker", "libeval-wasm module ready");
+      appendWorkerDebugLog(
+        "worker",
+        storage.enabled
+          ? "libeval-wasm module ready with persistent browser storage"
+          : "libeval-wasm module ready without persistent browser storage" +
+              (storage.reason ? " (" + storage.reason + ")" : ""),
+      );
       return module;
     })();
   }
@@ -743,8 +768,16 @@ self.addEventListener("message", async (event) => {
 
   async function loadEvaluator() {
     if (window.NixOSRegeditStandaloneEvaluatorSource) {
-      const loaded = await loadWorkerEvaluator(window.NixOSRegeditStandaloneEvaluatorSource);
-      if (loaded) return true;
+      try {
+        const loaded = await loadWorkerEvaluator(window.NixOSRegeditStandaloneEvaluatorSource);
+        if (loaded) return true;
+      } catch (error) {
+        window.NixOSRegeditEvaluatorLoadError =
+          error && error.message ? error.message : String(error);
+      }
+      if (typeof window.createLibevalWasm !== "function") {
+        (0, eval)(window.NixOSRegeditStandaloneEvaluatorSource);
+      }
     }
 
     const createEvaluator = window.createLibevalWasm;
@@ -770,7 +803,13 @@ self.addEventListener("message", async (event) => {
     const storage = await preparePersistentStorage(module);
     const evaluateRaw = module.cwrap("libeval_wasm", "string", ["string"]);
     const currentSystemRaw = module.cwrap("libeval_wasm_current_system", "string", []);
-    appendLocalDebugLog("loader", "libeval-wasm module ready");
+    appendLocalDebugLog(
+      "loader",
+      storage.enabled
+        ? "libeval-wasm module ready with persistent browser storage"
+        : "libeval-wasm module ready without persistent browser storage" +
+            (storage.reason ? " (" + storage.reason + ")" : ""),
+    );
     const evalNix = async (expression) => {
       appendLocalDebugLog("libeval-wasm", "evaluating expression");
       const response = JSON.parse(evaluateRaw(expression));

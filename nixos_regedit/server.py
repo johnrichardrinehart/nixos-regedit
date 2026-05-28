@@ -9,6 +9,8 @@ import json
 import mimetypes
 import os
 import re
+import shutil
+import subprocess
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -55,7 +57,7 @@ def backend_index(static_dir: Path = STATIC_DIR, *, initial_expression: str = ""
         "local\n"
         "              Python backend delegates fetching to the system <code>nix</code> command."
     )
-    html = html.replace('    <script src="libeval-wasm.js"></script>\n', "")
+    html = html.replace('    <script src="libeval.js"></script>\n', "")
     html = html.replace(
         '    <script src="evaluator-loader.js"></script>',
         '    <script src="backend-loader.js"></script>',
@@ -304,16 +306,38 @@ def build_server(
     )
 
 
+def open_browser(url: str) -> bool:
+    for command in ("xdg-open", "open", "brave", "chromium", "firefox"):
+        executable = shutil.which(command)
+        if not executable:
+            continue
+        try:
+            subprocess.Popen(
+                [executable, url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return True
+        except OSError:
+            continue
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--no-open", action="store_true", help="do not open the browser")
     parser.add_argument("expression", nargs="?")
     args = parser.parse_args(argv)
 
     httpd = build_server(args.host, args.port, initial_expression=args.expression or "")
     host, port = httpd.server_address
-    print(f"nixos-regedit listening on http://{host}:{port}", flush=True)
+    url = f"http://{host}:{port}"
+    print(f"nixos-regedit listening on {url}", flush=True)
+    if not args.no_open:
+        open_browser(url)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

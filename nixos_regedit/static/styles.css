@@ -55,6 +55,7 @@ button:active {
   display: grid;
   grid-template-rows: 24px 32px auto auto auto auto auto minmax(0, 1fr) 22px;
   height: 100vh;
+  width: 100vw;
   min-width: 980px;
   border: 2px solid;
   border-color: var(--light) var(--dark) var(--dark) var(--light);
@@ -266,6 +267,10 @@ input {
   border-bottom: 1px solid var(--mid);
 }
 
+#moduleSourceRow {
+  grid-row: 6;
+}
+
 .evaluated-row[hidden] {
   display: none;
 }
@@ -289,7 +294,7 @@ input {
 }
 
 .diagnostics {
-  grid-row: 6;
+  grid-row: 7;
   margin: 5px;
   padding: 6px;
   max-height: 160px;
@@ -330,9 +335,9 @@ input {
 }
 
 .content {
-  grid-row: 7;
+  grid-row: 8;
   display: grid;
-  grid-template-columns: minmax(190px, 28vw) 5px 1fr;
+  grid-template-columns: clamp(240px, 28vw, 560px) 5px minmax(0, 1fr);
   min-height: 0;
   border-top: 1px solid var(--light);
 }
@@ -364,6 +369,20 @@ input {
   flex-direction: column;
   margin: 5px 5px 5px 0;
   overflow: hidden;
+}
+
+.content.no-matches {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.content.no-matches .tree-pane,
+.content.no-matches .splitter,
+.content.no-matches .table-region {
+  display: none;
+}
+
+.content.no-matches .details-pane {
+  margin: 5px;
 }
 
 .tree {
@@ -464,6 +483,11 @@ th:nth-child(2) {
   display: grid;
   grid-template-columns: 120px 1fr;
   gap: 5px 8px;
+}
+
+.empty-details {
+  padding: 10px;
+  color: #333333;
 }
 
 .detail-label {
@@ -634,7 +658,7 @@ pre {
 }
 
 .statusbar {
-  grid-row: 8;
+  grid-row: 9;
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 4px;

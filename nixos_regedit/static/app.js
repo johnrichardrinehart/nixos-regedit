@@ -68,6 +68,7 @@ const elements = {
 let pendingUrlOption = null;
 let pendingUrlExpanded = null;
 let filterTimer = null;
+let evaluatorReadinessPoll = null;
 let evaluatorAvailable = false;
 let evaluatorLoadSettled = Boolean(window.NixOSRegeditEvaluator);
 let standaloneMode = Boolean(window.NixOSRegeditStandalone);
@@ -134,6 +135,12 @@ function refreshEvaluatorAvailability() {
   );
   elements.evaluate.disabled = !evaluatorAvailable;
   if (evaluatorAvailable) {
+    if (
+      elements.status.textContent === "Loading evaluator" ||
+      elements.status.textContent === "Evaluator unavailable"
+    ) {
+      setStatus("Ready");
+    }
     if (!elements.diagnostics.hidden && elements.diagnostics.textContent.includes("No evaluator")) {
       showDiagnostics([]);
     }
@@ -148,6 +155,16 @@ function refreshEvaluatorAvailability() {
     showDiagnostics([]);
   }
   return evaluatorAvailable;
+}
+
+function markEvaluatorReady() {
+  evaluatorLoadSettled = true;
+  if (evaluatorReadinessPoll) {
+    window.clearInterval(evaluatorReadinessPoll);
+    evaluatorReadinessPoll = null;
+  }
+  refreshEvaluatorAvailability();
+  maybeAutoEvaluate();
 }
 
 function maybeAutoEvaluate() {
@@ -923,10 +940,13 @@ function renderTreeNode(node) {
 function renderRows() {
   const parts = filterParts();
   ensureVisibleSelection(parts);
+  const filtered = parts.length > 0 ? filteredEntries(parts) : null;
+  const noMatches = Boolean(filtered && filtered.length === 0);
+  elements.content.classList.toggle("no-matches", noMatches);
   const allRows = optionsForPath(state.selectedPath, parts);
   const rows = allRows;
 
-  elements.tableRegion.hidden = allRows.length <= 1;
+  elements.tableRegion.hidden = noMatches || allRows.length <= 1;
   elements.rows.replaceChildren();
   rows.forEach(([key, option]) => {
     const tr = document.createElement("tr");
@@ -951,7 +971,10 @@ function renderRows() {
   });
   const total = Object.keys(state.options).length;
   if (parts.length > 0) {
-    elements.count.textContent = `${rows.length} of ${filteredEntries(parts).length} matching options`;
+    elements.count.textContent =
+      filtered.length === 0
+        ? "0 matching options"
+        : `${rows.length} of ${filtered.length} matching options`;
   } else {
     elements.count.textContent = `${rows.length} of ${total} options`;
   }
@@ -962,7 +985,15 @@ function renderDetails() {
   const option = key ? state.options[key] : null;
 
   if (!option) {
-    elements.details.textContent = "";
+    const parts = filterParts();
+    if (parts.length > 0 && filteredEntries(parts).length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty-details";
+      empty.textContent = `No options match "${state.filterText}".`;
+      elements.details.replaceChildren(empty);
+    } else {
+      elements.details.textContent = "";
+    }
     return;
   }
 
@@ -1341,19 +1372,28 @@ loadStandaloneNetworkConfig();
 renderEvaluatedExpression();
 renderAll();
 refreshEvaluatorAvailability();
-window.addEventListener("nixos-regedit-evaluator-ready", () => {
-  evaluatorLoadSettled = true;
-  refreshEvaluatorAvailability();
-  maybeAutoEvaluate();
-});
+window.addEventListener("nixos-regedit-evaluator-ready", markEvaluatorReady);
 window.addEventListener("nixos-regedit-evaluator-failed", (event) => {
   evaluatorLoadSettled = true;
+  if (evaluatorReadinessPoll) {
+    window.clearInterval(evaluatorReadinessPoll);
+    evaluatorReadinessPoll = null;
+  }
   refreshEvaluatorAvailability();
   if (event.detail) showDiagnostics([String(event.detail)]);
 });
+if (!evaluatorAvailable) {
+  evaluatorReadinessPoll = window.setInterval(() => {
+    if (window.NixOSRegeditEvaluator) markEvaluatorReady();
+  }, 250);
+}
 window.setTimeout(() => {
   if (!evaluatorAvailable) {
     evaluatorLoadSettled = true;
+    if (evaluatorReadinessPoll) {
+      window.clearInterval(evaluatorReadinessPoll);
+      evaluatorReadinessPoll = null;
+    }
     refreshEvaluatorAvailability();
   }
 }, 15000);

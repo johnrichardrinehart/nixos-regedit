@@ -129,13 +129,13 @@ pkgs.stdenvNoCC.mkDerivation {
       -sEXPORTED_FUNCTIONS='["_libeval_wasm","_libeval_wasm_current_system","_malloc","_free"]' \
       -sEXPORTED_RUNTIME_METHODS='["cwrap","UTF8ToString","getExceptionMessage","FS","IDBFS","ENV"]' \
       -lidbfs.js \
-      -o libeval-wasm.js
+      -o libeval.js
     runHook postBuild
   '';
 
   installPhase = ''
     runHook preInstall
-    install -Dm644 libeval-wasm.js $out/share/libeval-wasm/libeval-wasm.js
+    install -Dm644 libeval.js $out/share/libeval-wasm/libeval.js
     ${pkgs.lib.optionalString (documentation != null) ''
       install -Dm644 ${documentation} $out/share/doc/libeval-wasm/README.md
     ''}
@@ -143,6 +143,6 @@ pkgs.stdenvNoCC.mkDerivation {
   '';
 
   passthru = {
-    jsPath = "share/libeval-wasm/libeval-wasm.js";
+    jsPath = "share/libeval-wasm/libeval.js";
   };
 }

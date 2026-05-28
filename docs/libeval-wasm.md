@@ -21,7 +21,7 @@ From another flake, consume it as an ordinary package output:
       libevalWasm = nixos-regedit.packages.${system}.libeval-wasm;
     in {
       packages.${system}.my-app = nixpkgs.legacyPackages.${system}.stdenvNoCC.mkDerivation {
-        # Copy ${libevalWasm}/share/libeval-wasm/libeval-wasm.js into your app.
+        # Copy ${libevalWasm}/share/libeval-wasm/libeval.js into your app.
       };
     };
 }
@@ -30,13 +30,13 @@ From another flake, consume it as an ordinary package output:
 The package installs:
 
 ```text
-share/libeval-wasm/libeval-wasm.js
+share/libeval-wasm/libeval.js
 ```
 
 Load that file in a page and instantiate the module:
 
 ```html
-<script src="libeval-wasm.js"></script>
+<script src="libeval.js"></script>
 <script>
   const module = await createLibevalWasm();
   const evalNix = module.cwrap("libeval_wasm", "string", ["string"]);

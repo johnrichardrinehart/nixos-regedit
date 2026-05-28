@@ -16,7 +16,7 @@ class ServerTests(unittest.TestCase):
     def run_server(self, evaluator):
         static_dir = Path(tempfile.mkdtemp())
         static_dir.joinpath("index.html").write_text(
-            '<!doctype html><script src="libeval-wasm.js"></script>\n'
+            '<!doctype html><script src="libeval.js"></script>\n'
             '<script src="evaluator-loader.js"></script>',
             encoding="utf-8",
         )
@@ -45,7 +45,7 @@ class ServerTests(unittest.TestCase):
     def test_backend_index_uses_backend_loader(self):
         html = backend_index().decode("utf-8")
         self.assertIn('src="backend-loader.js"', html)
-        self.assertNotIn('src="libeval-wasm.js"', html)
+        self.assertNotIn('src="libeval.js"', html)
         self.assertNotIn('src="evaluator-loader.js"', html)
         self.assertNotIn('id="allowFetch"', html)
         self.assertNotIn("Allow fetch", html)
@@ -63,16 +63,18 @@ class ServerTests(unittest.TestCase):
 
     def test_backend_cli_defaults_to_localhost_dynamic_port(self):
         with unittest.mock.patch("nixos_regedit.server.build_server") as build_server:
-            build_server.return_value.server_address = ("127.0.0.1", 45678)
-            build_server.return_value.serve_forever.side_effect = KeyboardInterrupt
+            with unittest.mock.patch("nixos_regedit.server.open_browser") as open_browser:
+                build_server.return_value.server_address = ("127.0.0.1", 45678)
+                build_server.return_value.serve_forever.side_effect = KeyboardInterrupt
 
-            self.assertEqual(server.main(["github:nixos/nixpkgs"]), 0)
+                self.assertEqual(server.main(["github:nixos/nixpkgs"]), 0)
 
         build_server.assert_called_once_with(
             "127.0.0.1",
             0,
             initial_expression="github:nixos/nixpkgs",
         )
+        open_browser.assert_called_once_with("http://127.0.0.1:45678")
 
     def test_health_and_static(self):
         base = self.run_server(lambda payload: {"ok": True, "options": {}, "optionCount": 0})

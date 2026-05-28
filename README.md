@@ -67,7 +67,7 @@ The Nix evaluator is available separately as:
 nix build --builders '' .#libeval-wasm
 ```
 
-That package installs `share/libeval-wasm/libeval-wasm.js`.
+That package installs `share/libeval-wasm/libeval.js`.
 It is an Emscripten `SINGLE_FILE` module exporting
 `createLibevalWasm()`. Other browser apps can load it and call
 `module.cwrap("libeval_wasm", "string", ["string"])` to evaluate a Nix

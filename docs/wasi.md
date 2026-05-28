@@ -81,7 +81,7 @@ The current branch now has one libeval-wasm target:
 
 - `.#libeval-wasm`: a reusable Emscripten `SINGLE_FILE` module linked
   against Nix's C API closure. It installs
-  `share/libeval-wasm/libeval-wasm.js` and exports `createLibevalWasm()`.
+  `share/libeval-wasm/libeval.js` and exports `createLibevalWasm()`.
 
 See `docs/libeval-wasm.md` for the JavaScript/C ABI and persistent storage
 integration contract.

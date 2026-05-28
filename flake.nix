@@ -184,7 +184,7 @@
               runHook preInstall
               python tools/build_standalone.py \
                 --static-dir nixos_regedit/static \
-                --evaluator-js ${self.packages.${system}.libeval-wasm}/share/libeval-wasm/libeval-wasm.js \
+                --evaluator-js ${self.packages.${system}.libeval-wasm}/share/libeval-wasm/libeval.js \
                 --out $out/share/nixos-regedit/index.html
               mkdir -p $out/bin
               cat > $out/bin/nixos-regedit <<EOF

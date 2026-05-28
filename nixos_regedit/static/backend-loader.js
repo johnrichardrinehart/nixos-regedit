@@ -85,6 +85,12 @@
       if (typeof onPhase === "function") onPhase("Evaluating");
       return postJsonStream("/api/evaluate-stream", backendRequest(request), onDebugLog, signal);
     },
+
+    cancel() {
+      // The app owns the AbortSignal passed to fetch(). The backend evaluator
+      // has no persistent worker to tear down, so cancellation is just a
+      // compatibility hook matching the standalone evaluator interface.
+    },
   };
 
   window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-ready"));

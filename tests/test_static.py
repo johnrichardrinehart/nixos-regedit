@@ -41,7 +41,8 @@ class StaticBundleTests(unittest.TestCase):
         self.assertNotIn("const evaluationExpression", app)
         index = Path("nixos_regedit/static/index.html").read_text()
         self.assertIn("evaluator-loader.js", index)
-        self.assertIn("libeval-wasm.js", index)
+        self.assertIn("libeval.js", index)
+        self.assertNotIn("libeval-wasm.js", index)
         self.assertIn('id="moduleSource"', index)
         self.assertIn('id="standaloneNetworkRow"', index)
         self.assertIn('id="proxyUrl"', index)
@@ -74,6 +75,10 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("shouldRetryAfterClearingFetchCache", loader)
         self.assertIn("NAR hash mismatch", loader)
         self.assertIn("loadWorkerEvaluator", loader)
+        self.assertIn("NixOSRegeditEvaluatorLoadError", loader)
+        self.assertIn("(0, eval)(window.NixOSRegeditStandaloneEvaluatorSource)", loader)
+        self.assertIn("Persistent browser storage unavailable", loader)
+        self.assertIn("libeval-wasm module ready without persistent browser storage", loader)
         self.assertIn("NixOSRegeditStandaloneEvaluatorSource", loader)
         self.assertIn("new Worker", loader)
         self.assertIn("printErr", loader)
@@ -83,6 +88,9 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("const { signal, onDebugLog, onPhase", loader)
         self.assertIn("relatedPackagesDoc", loader)
         self.assertNotIn("relatedPackages = null", loader)
+        self.assertNotIn(
+            'if (!message.includes("Mount point is already in use")) throw error', loader
+        )
         wasm_source = Path("src/libeval-wasm.cc").read_text()
         self.assertNotIn('nix_setting_set(ctx.ptr, "tarball-ttl"', wasm_source)
         self.assertIn("processSha256Block", wasm_source)
@@ -96,6 +104,8 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("70vw", styles)
         self.assertIn("60vh", styles)
         self.assertIn("overflow-x: hidden", styles)
+        self.assertIn(".content.no-matches", styles)
+        self.assertIn("grid-row: 9", styles)
 
     def test_archive_proxy_worker_is_constrained(self):
         worker = Path("infra/cloudflare/workers/archive-proxy.js").read_text()
@@ -127,6 +137,7 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("NixOSRegeditBackend", backend_loader)
         self.assertIn("backendRequest", backend_loader)
         self.assertIn("allowFetch: true", backend_loader)
+        self.assertIn("cancel()", backend_loader)
         self.assertIn("backend_index", server)
         self.assertIn("backend-loader.js", server)
 
@@ -143,11 +154,34 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("evaluate({ useCache: false, restart: true })", app)
         self.assertIn("abortActiveEvaluation", app)
         self.assertIn("setEvaluationPhase", app)
+        self.assertIn("evaluatorReadinessPoll", app)
+        self.assertIn("markEvaluatorReady", app)
+        self.assertIn('elements.status.textContent === "Loading evaluator"', app)
+        self.assertIn('classList.toggle("no-matches"', app)
+        self.assertIn("No options match", app)
+
+    def test_standalone_evaluator_load_survives_storage_denial(self):
+        loader = Path("nixos_regedit/static/evaluator-loader.js").read_text()
+
+        self.assertIn("Persistent browser storage unavailable", loader)
+        self.assertIn("libeval-wasm module ready without persistent browser storage", loader)
+        self.assertIn('backend: "MEMFS"', loader)
+        self.assertIn("storage.enabled = false", loader)
+        self.assertNotIn(
+            'if (!message.includes("Mount point is already in use")) throw error', loader
+        )
+
+    def test_standalone_falls_back_when_worker_bootstrap_fails(self):
+        loader = Path("nixos_regedit/static/evaluator-loader.js").read_text()
+
+        self.assertIn("NixOSRegeditEvaluatorLoadError", loader)
+        self.assertIn("(0, eval)(window.NixOSRegeditStandaloneEvaluatorSource)", loader)
+        self.assertIn("const createEvaluator = window.createLibevalWasm", loader)
 
     def test_standalone_builder_inlines_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp, "index.html")
-            evaluator = Path(tmp, "libeval-wasm.js")
+            evaluator = Path(tmp, "libeval.js")
             evaluator.write_text("globalThis.createLibevalWasm = function () {};", encoding="utf-8")
             argv = [
                 "build_standalone.py",
@@ -164,10 +198,12 @@ class StaticBundleTests(unittest.TestCase):
             self.assertIn("<style>", html)
             self.assertIn("<script>", html)
             self.assertIn("NixOSRegeditStandaloneEvaluatorSource", html)
+            self.assertIn("sourceURL=libeval.js", html)
             self.assertNotIn('src="app.js"', html)
             self.assertNotIn('href="styles.css"', html)
             self.assertNotIn('src="evaluator-loader.js"', html)
-            self.assertNotIn('src="libeval-wasm.js"', html)
+            self.assertNotIn('src="libeval.js"', html)
+            self.assertNotIn("libeval-wasm.wasm", html)
             self.assertIn(' + "\\n//# sourceURL=app.js"', html)
             self.assertNotIn(' + "\n//# sourceURL=app.js"', html)
 
