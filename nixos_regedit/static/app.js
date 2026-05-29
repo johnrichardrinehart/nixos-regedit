@@ -183,6 +183,7 @@ function maybeAutoEvaluate() {
 }
 
 async function defaultSystem() {
+  if (standaloneMode) return "x86_64-linux";
   try {
     const evaluator = regeditEvaluator();
     if (typeof evaluator.currentSystem === "function") {
@@ -567,7 +568,7 @@ function setStatus(message) {
 function currentEvaluationInput() {
   return {
     expression: elements.expression.value.trim(),
-    system: elements.system.value.trim(),
+    system: elements.system.value.trim() || (standaloneMode ? "x86_64-linux" : ""),
     allowFetch: Boolean(
       window.NixOSRegeditBackend || (elements.allowFetch && elements.allowFetch.checked),
     ),

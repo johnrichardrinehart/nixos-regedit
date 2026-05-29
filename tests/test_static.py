@@ -104,6 +104,8 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("restoreEvaluationState(preserveState)", app)
         self.assertIn("forceEvaluatorMemoryClean", app)
         self.assertIn("handleMemoryExhaustion", app)
+        self.assertIn('if (standaloneMode) return "x86_64-linux";', app)
+        self.assertIn('elements.system.value.trim() || (standaloneMode ? "x86_64-linux" : "")', app)
         self.assertIn("loadWorkerEvaluator", loader)
         self.assertIn("NixOSRegeditEvaluatorLoadError", loader)
         self.assertIn("(0, eval)(window.NixOSRegeditStandaloneEvaluatorSource)", loader)
@@ -210,6 +212,13 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn(
             "recycling browser evaluator worker after remote flake evaluation", standalone_loader
         )
+        self.assertIn(
+            "recycling browser evaluator worker after standalone evaluation", standalone_loader
+        )
+        self.assertIn("if (!worker) return { ok: true };", standalone_loader)
+        self.assertIn("ensureWorkerReady", standalone_loader)
+        self.assertIn("storage: activeStorage", standalone_loader)
+        self.assertNotIn("const initialized = await spawnWorker();", standalone_loader)
 
         matrix = Path("tools/evaluation_matrix.py").read_text()
         for repository in [

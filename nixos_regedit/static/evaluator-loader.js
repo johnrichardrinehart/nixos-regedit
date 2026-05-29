@@ -835,8 +835,10 @@ self.addEventListener("message", async (event) => {
     const url = URL.createObjectURL(workerScript);
     let worker = null;
     let ready = null;
+    let activeStorage = null;
     let nextId = 0;
     const pending = new Map();
+    let api = null;
 
     const attachWorkerHandlers = (activeWorker) => {
       activeWorker.addEventListener("message", (event) => {
@@ -868,6 +870,10 @@ self.addEventListener("message", async (event) => {
 
     const call = (method, request, onDebugLog, onPhase) =>
       new Promise((resolve, reject) => {
+        if (!worker) {
+          reject(new Error("Evaluator worker is not running."));
+          return;
+        }
         const id = ++nextId;
         pending.set(id, { resolve, reject, onDebugLog, onPhase });
         worker.postMessage({ id, method, request });
@@ -876,44 +882,50 @@ self.addEventListener("message", async (event) => {
     const spawnWorker = () => {
       worker = new Worker(url, { name: "nixos-regedit-libeval-wasm" });
       attachWorkerHandlers(worker);
-      ready = call("init");
+      ready = call("init").then((initialized) => {
+        activeStorage = initialized.storage;
+        if (api) api.storage = activeStorage;
+        return initialized;
+      });
+      return ready;
+    };
+
+    const ensureWorkerReady = async () => {
+      if (!worker || !ready) spawnWorker();
       return ready;
     };
 
     const recycleWorker = (reason = "Evaluator worker recycled.") => {
       if (worker) worker.terminate();
       failPending(new Error(reason));
-      ready = spawnWorker().then((nextInitialized) => {
-        api.storage = nextInitialized.storage;
-        return nextInitialized;
-      });
-      return ready;
+      worker = null;
+      ready = null;
+      return Promise.resolve({ storage: activeStorage });
     };
 
-    const initialized = await spawnWorker();
-    const api = {
-      storage: initialized.storage,
+    api = {
+      storage: activeStorage,
       currentSystem: async () => {
-        await ready;
+        await ensureWorkerReady();
         return call("currentSystem");
       },
       resolve: async (request) => {
         const { signal, onDebugLog, onPhase, ...serializableRequest } = request || {};
-        await ready;
+        await ensureWorkerReady();
         return call("resolve", serializableRequest, onDebugLog, onPhase);
       },
       evaluate: async (request) => {
         const { signal, onDebugLog, onPhase, ...serializableRequest } = request || {};
-        await ready;
+        await ensureWorkerReady();
         const input = String(serializableRequest.expression || "").trim();
-        const recycleAfter =
+        const remoteFlake =
           Boolean(serializableRequest.allowFetch) &&
           looksLikeFlakeRef(input) &&
           isRemoteFlakeRef(input);
         try {
           return await call("evaluate", serializableRequest, onDebugLog, onPhase);
         } finally {
-          if (recycleAfter && worker) {
+          if (worker) {
             try {
               await call("collectMemory");
             } catch (_) {
@@ -923,7 +935,9 @@ self.addEventListener("message", async (event) => {
               onDebugLog({
                 time: new Date().toISOString(),
                 source: "worker",
-                message: "recycling browser evaluator worker after remote flake evaluation",
+                message: remoteFlake
+                  ? "recycling browser evaluator worker after remote flake evaluation"
+                  : "recycling browser evaluator worker after standalone evaluation",
               });
             }
             recycleWorker().catch(() => {});
@@ -931,6 +945,7 @@ self.addEventListener("message", async (event) => {
         }
       },
       collectMemory: async () => {
+        if (!worker) return { ok: true };
         await ready;
         return call("collectMemory");
       },
