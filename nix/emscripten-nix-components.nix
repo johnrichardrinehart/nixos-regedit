@@ -419,6 +419,9 @@ let
       '';
 
     postPatch = (prevAttrs.postPatch or "") + ''
+      ${pkgs.lib.optionalString ((prevAttrs.pname or "") == "nix-expr") ''
+        patch -p0 < ${./patches/nix-expr-emscripten-release-eval-memory.patch}
+      ''}
       while IFS= read -r mesonFile; do
         substituteInPlace "$mesonFile" \
           --replace-fail "prelink : true" "prelink : false"

@@ -124,6 +124,7 @@ pkgs.stdenvNoCC.mkDerivation {
       -sEXPORT_NAME=createLibevalWasm \
       -sSINGLE_FILE=1 \
       -sFORCE_FILESYSTEM=1 \
+      -sMALLOC=dlmalloc \
       -sINITIAL_MEMORY=268435456 \
       -sMAXIMUM_MEMORY=1073741824 \
       -sALLOW_MEMORY_GROWTH=1 \

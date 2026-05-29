@@ -237,10 +237,15 @@ class StaticBundleTests(unittest.TestCase):
         recipe = Path("nix/libeval-wasm.nix").read_text()
         source = Path("src/libeval-wasm.cc").read_text()
         transfer = Path("nix/emscripten-filetransfer.cc").read_text()
+        components = Path("nix/emscripten-nix-components.nix").read_text()
+        eval_memory_patch = Path(
+            "nix/patches/nix-expr-emscripten-release-eval-memory.patch"
+        ).read_text()
 
         self.assertIn("nixEmscriptenComponents.libs.nix-util.dev", recipe)
         self.assertIn("nixEmscriptenComponents.emscriptenDeps.boost.dev", recipe)
         self.assertIn("pkgs.nlohmann_json", recipe)
+        self.assertIn("-sMALLOC=dlmalloc", recipe)
         self.assertIn("-sINITIAL_MEMORY=268435456", recipe)
         self.assertIn("-sMAXIMUM_MEMORY=1073741824", recipe)
         self.assertIn("-sALLOW_MEMORY_GROWTH=1", recipe)
@@ -255,6 +260,11 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("maybeCollectJsGarbage", source)
         self.assertIn('typeof globalThis.gc === "function"', source)
         self.assertIn("emscripten_get_heap_size", source)
+        self.assertIn("malloc_trim(0)", source)
+        self.assertIn("nix-expr-emscripten-release-eval-memory.patch", components)
+        self.assertIn("EvalMemory::~EvalMemory", eval_memory_patch)
+        self.assertIn("allocations.push_back(p)", eval_memory_patch)
+        self.assertIn("free(allocation)", eval_memory_patch)
         self.assertIn("const responseHeader = name =>", transfer)
         self.assertIn('(shouldProxy ? responseHeader("X-Upstream-URL") : "")', transfer)
 

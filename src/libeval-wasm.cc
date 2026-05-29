@@ -29,6 +29,8 @@ struct Sha256State {
 std::unordered_map<void *, Sha256State> sha256States;
 std::string lastResult;
 
+extern "C" int malloc_trim(size_t pad);
+
 // clang-format off
 EM_JS(int, maybeCollectJsGarbage, (), {
     if (typeof globalThis.gc === "function") {
@@ -41,7 +43,9 @@ EM_JS(int, maybeCollectJsGarbage, (), {
 
 int collectRuntime() {
     sha256States.clear();
-    return maybeCollectJsGarbage();
+    const int wasmTrimmed = malloc_trim(0);
+    const int jsCollected = maybeCollectJsGarbage();
+    return wasmTrimmed || jsCollected;
 }
 
 uint32_t rotr(uint32_t value, unsigned int bits) {

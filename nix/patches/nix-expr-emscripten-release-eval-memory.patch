@@ -1,0 +1,66 @@
+--- eval.cc
++++ eval.cc
+@@ -232,6 +232,14 @@
+     assertGCInitialized();
+ }
+ 
++EvalMemory::~EvalMemory()
++{
++#if !NIX_USE_BOEHMGC
++    for (void * allocation : allocations)
++        free(allocation);
++#endif
++}
++
+ EvalState::EvalState(
+     const LookupPath & lookupPathFromArguments,
+     ref<Store> store,
+--- include/nix/expr/eval-inline.hh
++++ include/nix/expr/eval-inline.hh
+@@ -23,6 +23,15 @@
+ #endif
+     if (!p)
+         throw std::bad_alloc();
++
++#if !NIX_USE_BOEHMGC
++    try {
++        allocations.push_back(p);
++    } catch (...) {
++        free(p);
++        throw;
++    }
++#endif
+     return p;
+ }
+ 
+--- include/nix/expr/eval.hh
++++ include/nix/expr/eval.hh
+@@ -27,6 +27,9 @@
+ #include <map>
+ #include <optional>
+ #include <functional>
++#if !NIX_USE_BOEHMGC
++#  include <vector>
++#endif
+ 
+ namespace nix {
+ 
+@@ -317,6 +320,7 @@
+     };
+ 
+     EvalMemory();
++    ~EvalMemory();
+ 
+     EvalMemory(const EvalMemory &) = delete;
+     EvalMemory(EvalMemory &&) = delete;
+@@ -324,6 +328,10 @@
+     EvalMemory & operator=(EvalMemory &&) = delete;
+ 
+     inline void * allocBytes(size_t n);
++
++#if !NIX_USE_BOEHMGC
++    std::vector<void *> allocations;
++#endif
+     inline Value * allocValue();
+     inline Env & allocEnv(size_t size);
+ 
