@@ -37,6 +37,7 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("standaloneFetchConfig", app)
         self.assertIn("const CACHE_TTL_MS = 15 * 60 * 1000", app)
         self.assertIn("request.result.deleteObjectStore(CACHE_STORE)", app)
+        self.assertIn("function scheduleCachePut", app)
         self.assertNotIn('params.set("evaluatedExpression"', app)
         self.assertNotIn("const evaluationExpression", app)
         index = Path("nixos_regedit/static/index.html").read_text()
@@ -80,6 +81,10 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn('appendWorkerDebugLog("libeval-wasm:error", response.error)', loader)
         self.assertIn('appendLocalDebugLog("libeval-wasm:error", response.error)', loader)
         self.assertIn("showDiagnostics([payload.error, ...attempts])", app)
+        self.assertLess(
+            app.index("renderEvaluation(payload, { input });"),
+            app.index("scheduleCachePut(cacheKey, payload);"),
+        )
         self.assertIn("loadWorkerEvaluator", loader)
         self.assertIn("NixOSRegeditEvaluatorLoadError", loader)
         self.assertIn("(0, eval)(window.NixOSRegeditStandaloneEvaluatorSource)", loader)

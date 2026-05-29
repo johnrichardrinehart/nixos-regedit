@@ -712,6 +712,17 @@ async function cachePut(key, payload) {
   });
 }
 
+function scheduleCachePut(key, payload) {
+  const write = () => {
+    cachePut(key, payload).catch(() => {});
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(write, { timeout: 5000 });
+    return;
+  }
+  window.setTimeout(write, 0);
+}
+
 function optionSegments(key, option) {
   if (Array.isArray(option.loc) && option.loc.length > 0) {
     return option.loc.map(String);
@@ -1227,9 +1238,8 @@ async function evaluate({ useCache = true, restart = false } = {}) {
       setStatus("Evaluation failed");
       return;
     }
-    if (cacheKey) await cachePut(cacheKey, payload);
-    if (runId !== state.evaluationRunId) return;
     renderEvaluation(payload, { input });
+    if (cacheKey && runId === state.evaluationRunId) scheduleCachePut(cacheKey, payload);
   } catch (error) {
     if (abortController.signal.aborted || runId !== state.evaluationRunId) return;
     setDebugLog([debugEntry("", "ui", requestFailureMessage(error)), ...state.debugLog], input);
