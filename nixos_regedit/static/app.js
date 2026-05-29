@@ -55,6 +55,12 @@ const elements = {
   debugLogOverlay: $("debugLogOverlay"),
   debugLogClose: $("debugLogCloseButton"),
   debugLogBody: $("debugLogBody"),
+  preserveStateOverlay: $("preserveStateOverlay"),
+  preserveStateYes: $("preserveStateYesButton"),
+  preserveStateNo: $("preserveStateNoButton"),
+  memoryCleanOverlay: $("memoryCleanOverlay"),
+  memoryCleanRetry: $("memoryCleanRetryButton"),
+  memoryCleanCancel: $("memoryCleanCancelButton"),
   diagnostics: $("diagnostics"),
   content: $("content"),
   tableRegion: $("tableRegion"),
@@ -73,6 +79,8 @@ let evaluatorAvailable = false;
 let evaluatorLoadSettled = Boolean(window.NixOSRegeditEvaluator);
 let standaloneMode = Boolean(window.NixOSRegeditStandalone);
 let initialAutoEvaluateStarted = false;
+let pendingTriggeredEvaluation = null;
+let pendingMemoryRecovery = null;
 
 function loadStandaloneNetworkConfig() {
   standaloneMode = Boolean(window.NixOSRegeditStandalone);
@@ -358,6 +366,149 @@ function openDebugLog() {
 function closeDebugLog() {
   elements.debugLogOverlay.hidden = true;
   elements.debugLog.focus();
+}
+
+function captureEvaluationState() {
+  return {
+    expanded: new Set(state.expanded),
+    selectedPath: state.selectedPath,
+    selectedOptionKey: state.selectedOptionKey,
+    selectionExplicit: state.selectionExplicit,
+    declarationCopyIndex: state.declarationCopyIndex,
+  };
+}
+
+function treePathSet() {
+  const paths = [];
+  collectPaths(state.tree, paths);
+  return new Set(paths);
+}
+
+function restoreEvaluationState(snapshot) {
+  if (!snapshot) return false;
+  state.selectedPath = "";
+  state.selectedOptionKey = null;
+  const validPaths = treePathSet();
+  const preserved = Array.from(snapshot.expanded || []).filter((path) => validPaths.has(path));
+  state.expanded = new Set(["", ...preserved]);
+  state.selectionExplicit = Boolean(snapshot.selectionExplicit);
+  state.declarationCopyIndex = Number.isInteger(snapshot.declarationCopyIndex)
+    ? snapshot.declarationCopyIndex
+    : 0;
+  if (snapshot.selectedOptionKey && state.options[snapshot.selectedOptionKey]) {
+    return selectOptionKey(snapshot.selectedOptionKey, {
+      expand: true,
+      explicit: state.selectionExplicit,
+    });
+  }
+  if (snapshot.selectedPath && validPaths.has(snapshot.selectedPath)) {
+    state.selectedPath = snapshot.selectedPath;
+    state.selectedOptionKey = null;
+    expandPath(state.selectedPath);
+    return true;
+  }
+  return false;
+}
+
+function shouldPromptForTriggeredEvaluation() {
+  return Boolean(
+    currentEvaluationInput().expression &&
+    (state.evaluationInFlight || state.lastEvaluationInput || hasVisibleResults()),
+  );
+}
+
+function openPreserveStatePrompt(options) {
+  pendingTriggeredEvaluation = options;
+  elements.preserveStateOverlay.hidden = false;
+  elements.preserveStateYes.focus();
+}
+
+function closePreserveStatePrompt({ focusEvaluate = true } = {}) {
+  elements.preserveStateOverlay.hidden = true;
+  pendingTriggeredEvaluation = null;
+  if (focusEvaluate) elements.evaluate.focus();
+}
+
+function answerPreserveStatePrompt(preserve) {
+  const options = pendingTriggeredEvaluation;
+  if (!options) return;
+  const snapshot = preserve ? captureEvaluationState() : null;
+  closePreserveStatePrompt({ focusEvaluate: false });
+  evaluate({ ...options, preserveState: snapshot });
+}
+
+function triggerEvaluation(options = {}) {
+  if (shouldPromptForTriggeredEvaluation()) {
+    openPreserveStatePrompt(options);
+    return;
+  }
+  evaluate(options);
+}
+
+function isMemoryExhaustionMessage(message) {
+  return /out of memory|cannot enlarge memory arrays|memory access out of bounds|allocation failed|maximum call stack size exceeded/i.test(
+    String(message || ""),
+  );
+}
+
+async function forceEvaluatorMemoryClean() {
+  const evaluator = window.NixOSRegeditEvaluator || null;
+  if (!standaloneMode || !evaluator) return false;
+  if (typeof evaluator.resetMemory === "function") {
+    await evaluator.resetMemory();
+    return true;
+  }
+  if (typeof evaluator.cancel === "function") {
+    evaluator.cancel();
+    return true;
+  }
+  return false;
+}
+
+function openMemoryCleanPrompt(preserveState) {
+  pendingMemoryRecovery = {
+    preserveState,
+  };
+  elements.memoryCleanOverlay.hidden = false;
+  elements.memoryCleanRetry.focus();
+}
+
+function closeMemoryCleanPrompt({ focusEvaluate = true } = {}) {
+  elements.memoryCleanOverlay.hidden = true;
+  pendingMemoryRecovery = null;
+  if (focusEvaluate) elements.evaluate.focus();
+}
+
+function answerMemoryCleanPrompt(retry) {
+  const recovery = pendingMemoryRecovery;
+  closeMemoryCleanPrompt({ focusEvaluate: !retry });
+  if (!retry || !recovery) return;
+  evaluate({
+    useCache: false,
+    restart: true,
+    preserveState: recovery.preserveState,
+  });
+}
+
+async function handleMemoryExhaustion(message, input, preserveState) {
+  if (!isMemoryExhaustionMessage(message)) return false;
+  const cleaned = await forceEvaluatorMemoryClean();
+  const retryMessage = cleaned
+    ? "Standalone evaluator memory was cleaned. Click Re-evaluate to retry this input."
+    : "Standalone evaluator memory was exhausted, but this build cannot recycle evaluator memory in place. Reload the page or use the backend evaluator.";
+  setDebugLog(
+    [
+      debugEntry("", "ui", String(message || "Evaluation exhausted available memory.")),
+      debugEntry("", "ui", retryMessage),
+      ...state.debugLog,
+    ],
+    input,
+  );
+  if (!preserveState) resetResults();
+  showDiagnostics([message, retryMessage]);
+  setStatus(cleaned ? "Memory cleaned; re-evaluate required" : "Evaluation exhausted memory");
+  if (cleaned) openMemoryCleanPrompt(preserveState);
+  return true;
 }
 
 function renderEvaluatedExpression() {
@@ -1101,7 +1252,10 @@ function renderAll() {
   renderDetails();
 }
 
-function renderEvaluation(payload, { cached = false, input = currentEvaluationInput() } = {}) {
+function renderEvaluation(
+  payload,
+  { cached = false, input = currentEvaluationInput(), preserveState = null } = {},
+) {
   const payloadDebugLog = normalizeDebugLog(payload.debugLog || []);
   setDebugLog(
     payloadDebugLog.length > 0
@@ -1127,14 +1281,18 @@ function renderEvaluation(payload, { cached = false, input = currentEvaluationIn
     const paths = [];
     collectPaths(state.tree, paths);
     state.expanded = new Set(paths);
+  } else if (preserveState) {
+    restoreEvaluationState(preserveState);
   } else {
     state.expanded = new Set(["", ...(pendingUrlExpanded || [])]);
   }
-  state.selectedPath = state.tree.children[0] ? state.tree.children[0].path : "";
-  state.selectedOptionKey = state.tree.children[0]
-    ? state.tree.children[0].optionKeys[0] || null
-    : null;
-  state.selectionExplicit = false;
+  if (!preserveState || !state.selectedOptionKey) {
+    state.selectedPath = state.tree.children[0] ? state.tree.children[0].path : "";
+    state.selectedOptionKey = state.tree.children[0]
+      ? state.tree.children[0].optionKeys[0] || null
+      : null;
+    state.selectionExplicit = false;
+  }
   if (pendingUrlOption) {
     selectOptionKey(pendingUrlOption, { expand: true, explicit: true });
     pendingUrlOption = null;
@@ -1158,7 +1316,7 @@ function renderEvaluation(payload, { cached = false, input = currentEvaluationIn
   updateUrlState();
 }
 
-async function evaluate({ useCache = true, restart = false } = {}) {
+async function evaluate({ useCache = true, restart = false, preserveState = null } = {}) {
   if (!refreshEvaluatorAvailability()) return;
   const input = currentEvaluationInput();
   const expression = input.expression;
@@ -1183,6 +1341,9 @@ async function evaluate({ useCache = true, restart = false } = {}) {
     showDiagnostics(["expression is required"]);
     setStatus("Missing expression");
     return;
+  }
+  if (!preserveState && (state.lastEvaluationInput || hasVisibleResults())) {
+    resetResults();
   }
   const runId = state.evaluationRunId + 1;
   const abortController = new AbortController();
@@ -1211,7 +1372,7 @@ async function evaluate({ useCache = true, restart = false } = {}) {
       const cached = await cacheGet(cacheKey);
       if (runId !== state.evaluationRunId) return;
       if (cached) {
-        renderEvaluation(cached, { cached: true, input });
+        renderEvaluation(cached, { cached: true, input, preserveState });
         return;
       }
     }
@@ -1237,6 +1398,8 @@ async function evaluate({ useCache = true, restart = false } = {}) {
       const attempts = (payload.attempts || []).map(
         (attempt) => `${attempt.mode}: ${attempt.stderr || "failed"}`,
       );
+      const failureMessage = [payload.error, ...attempts].filter(Boolean).join("\n\n");
+      if (await handleMemoryExhaustion(failureMessage, input, preserveState)) return;
       const debugLog = normalizeDebugLog(payload.debugLog || []);
       setDebugLog(
         debugLog.length > 0
@@ -1247,18 +1410,20 @@ async function evaluate({ useCache = true, restart = false } = {}) {
             ],
         input,
       );
-      resetResults();
+      if (!preserveState) resetResults();
       showDiagnostics([payload.error, ...attempts]);
       setStatus("Evaluation failed");
       return;
     }
-    renderEvaluation(payload, { input });
+    renderEvaluation(payload, { input, preserveState });
     if (cacheKey && runId === state.evaluationRunId) scheduleCachePut(cacheKey, payload);
   } catch (error) {
     if (abortController.signal.aborted || runId !== state.evaluationRunId) return;
-    setDebugLog([debugEntry("", "ui", requestFailureMessage(error)), ...state.debugLog], input);
-    resetResults();
-    showDiagnostics([requestFailureMessage(error)]);
+    const message = requestFailureMessage(error);
+    if (await handleMemoryExhaustion(message, input, preserveState)) return;
+    setDebugLog([debugEntry("", "ui", message), ...state.debugLog], input);
+    if (!preserveState) resetResults();
+    showDiagnostics([message]);
     setStatus("Evaluation failed");
   } finally {
     if (runId === state.evaluationRunId) {
@@ -1337,11 +1502,13 @@ function scheduleFilter() {
   if (pending) setStatus("Filter pending");
 }
 
-elements.evaluate.addEventListener("click", () => evaluate({ useCache: false, restart: true }));
+elements.evaluate.addEventListener("click", () =>
+  triggerEvaluation({ useCache: false, restart: true }),
+);
 elements.expression.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
-    evaluate({ useCache: false, restart: true });
+    triggerEvaluation({ useCache: false, restart: true });
   }
 });
 elements.expression.addEventListener("input", () => {
@@ -1411,8 +1578,18 @@ elements.debugLogClose.addEventListener("click", closeDebugLog);
 elements.debugLogOverlay.addEventListener("click", (event) => {
   if (event.target === elements.debugLogOverlay) closeDebugLog();
 });
+elements.preserveStateYes.addEventListener("click", () => answerPreserveStatePrompt(true));
+elements.preserveStateNo.addEventListener("click", () => answerPreserveStatePrompt(false));
+elements.memoryCleanRetry.addEventListener("click", () => answerMemoryCleanPrompt(true));
+elements.memoryCleanCancel.addEventListener("click", () => answerMemoryCleanPrompt(false));
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !elements.helpOverlay.hidden) {
+  if (event.key === "Escape" && !elements.memoryCleanOverlay.hidden) {
+    event.preventDefault();
+    closeMemoryCleanPrompt();
+  } else if (event.key === "Escape" && !elements.preserveStateOverlay.hidden) {
+    event.preventDefault();
+    closePreserveStatePrompt();
+  } else if (event.key === "Escape" && !elements.helpOverlay.hidden) {
     event.preventDefault();
     closeHelp();
   } else if (event.key === "Escape" && !elements.debugLogOverlay.hidden) {

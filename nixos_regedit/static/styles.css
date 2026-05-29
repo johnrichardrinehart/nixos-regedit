@@ -507,7 +507,9 @@ th:nth-child(2) {
   text-decoration: underline;
 }
 
-.help-overlay {
+.help-overlay,
+.preserve-state-overlay,
+.memory-clean-overlay {
   position: fixed;
   inset: 0;
   display: grid;
@@ -517,11 +519,15 @@ th:nth-child(2) {
   z-index: 10;
 }
 
-.help-overlay[hidden] {
+.help-overlay[hidden],
+.preserve-state-overlay[hidden],
+.memory-clean-overlay[hidden] {
   display: none;
 }
 
-.help-dialog {
+.help-dialog,
+.preserve-state-dialog,
+.memory-clean-dialog {
   width: min(720px, 100%);
   max-height: min(760px, calc(100vh - 48px));
   display: flex;
@@ -532,7 +538,14 @@ th:nth-child(2) {
   box-shadow: 3px 3px 0 rgb(0 0 0 / 35%);
 }
 
-.help-titlebar {
+.preserve-state-dialog,
+.memory-clean-dialog {
+  width: min(360px, calc(100vw - 48px));
+}
+
+.help-titlebar,
+.preserve-state-titlebar,
+.memory-clean-titlebar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -550,12 +563,31 @@ th:nth-child(2) {
   font-weight: 400;
 }
 
-.help-body {
+.help-body,
+.preserve-state-body,
+.memory-clean-body {
   overflow: auto;
   padding: 8px 10px 10px;
   border: 1px solid;
   border-color: var(--dark) var(--light) var(--light) var(--dark);
   background: #f7f7f7;
+}
+
+.preserve-state-body p,
+.memory-clean-body p {
+  margin: 0 0 12px;
+}
+
+.preserve-state-actions,
+.memory-clean-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.preserve-state-actions button,
+.memory-clean-actions button {
+  min-width: 72px;
 }
 
 .help-body section + section {

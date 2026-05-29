@@ -217,6 +217,51 @@
         <pre id="debugLogBody" class="debug-log-body"></pre>
       </div>
     </section>
+    <section
+      id="preserveStateOverlay"
+      class="preserve-state-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="preserveStateTitle"
+      hidden
+    >
+      <div class="preserve-state-dialog">
+        <header class="preserve-state-titlebar">
+          <span id="preserveStateTitle">Triggered evaluation</span>
+        </header>
+        <div class="preserve-state-body">
+          <p>Triggered evaluation: preserve state?</p>
+          <div class="preserve-state-actions">
+            <button id="preserveStateYesButton" type="button" accesskey="y">Yes</button>
+            <button id="preserveStateNoButton" type="button" accesskey="n">No</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section
+      id="memoryCleanOverlay"
+      class="memory-clean-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="memoryCleanTitle"
+      hidden
+    >
+      <div class="memory-clean-dialog">
+        <header class="memory-clean-titlebar">
+          <span id="memoryCleanTitle">Evaluator memory cleaned</span>
+        </header>
+        <div class="memory-clean-body">
+          <p>
+            Standalone evaluation exhausted available memory. The evaluator was cleaned and must
+            re-evaluate this input.
+          </p>
+          <div class="memory-clean-actions">
+            <button id="memoryCleanRetryButton" type="button">Re-evaluate</button>
+            <button id="memoryCleanCancelButton" type="button">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </section>
     <script src="libeval.js"></script>
     <script src="evaluator-loader.js"></script>
     <script src="app.js"></script>

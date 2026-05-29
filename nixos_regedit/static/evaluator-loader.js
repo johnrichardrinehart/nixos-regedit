@@ -852,6 +852,16 @@ self.addEventListener("message", async (event) => {
       return ready;
     };
 
+    const recycleWorker = (reason = "Evaluator worker recycled.") => {
+      if (worker) worker.terminate();
+      failPending(new Error(reason));
+      ready = spawnWorker().then((nextInitialized) => {
+        api.storage = nextInitialized.storage;
+        return nextInitialized;
+      });
+      return ready;
+    };
+
     const initialized = await spawnWorker();
     const api = {
       storage: initialized.storage,
@@ -867,15 +877,31 @@ self.addEventListener("message", async (event) => {
       evaluate: async (request) => {
         const { signal, onDebugLog, onPhase, ...serializableRequest } = request || {};
         await ready;
-        return call("evaluate", serializableRequest, onDebugLog, onPhase);
+        const input = String(serializableRequest.expression || "").trim();
+        const recycleAfter =
+          Boolean(serializableRequest.allowFetch) &&
+          looksLikeFlakeRef(input) &&
+          isRemoteFlakeRef(input);
+        try {
+          return await call("evaluate", serializableRequest, onDebugLog, onPhase);
+        } finally {
+          if (recycleAfter && worker) {
+            if (typeof onDebugLog === "function") {
+              onDebugLog({
+                time: new Date().toISOString(),
+                source: "worker",
+                message: "recycling browser evaluator worker after remote flake evaluation",
+              });
+            }
+            recycleWorker().catch(() => {});
+          }
+        }
+      },
+      resetMemory: async () => {
+        await recycleWorker("Evaluator memory reset.");
       },
       cancel: () => {
-        if (worker) worker.terminate();
-        failPending(new Error("Evaluation cancelled."));
-        ready = spawnWorker().then((nextInitialized) => {
-          api.storage = nextInitialized.storage;
-          return nextInitialized;
-        });
+        recycleWorker("Evaluation cancelled.").catch(() => {});
       },
     };
     window.NixOSRegeditEvaluator = api;

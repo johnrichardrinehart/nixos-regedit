@@ -92,9 +92,18 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn('appendLocalDebugLog("libeval-wasm:error", response.error)', loader)
         self.assertIn("showDiagnostics([payload.error, ...attempts])", app)
         self.assertLess(
-            app.index("renderEvaluation(payload, { input });"),
+            app.index("renderEvaluation(payload, { input, preserveState });"),
             app.index("scheduleCachePut(cacheKey, payload);"),
         )
+        self.assertIn("Triggered evaluation: preserve state?", index)
+        self.assertIn('id="preserveStateOverlay"', index)
+        self.assertIn("Standalone evaluation exhausted available memory", index)
+        self.assertIn('id="memoryCleanOverlay"', index)
+        self.assertIn("captureEvaluationState", app)
+        self.assertIn("triggerEvaluation({ useCache: false, restart: true })", app)
+        self.assertIn("restoreEvaluationState(preserveState)", app)
+        self.assertIn("forceEvaluatorMemoryClean", app)
+        self.assertIn("handleMemoryExhaustion", app)
         self.assertIn("loadWorkerEvaluator", loader)
         self.assertIn("NixOSRegeditEvaluatorLoadError", loader)
         self.assertIn("(0, eval)(window.NixOSRegeditStandaloneEvaluatorSource)", loader)
@@ -184,7 +193,7 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("selectedFlake.explicit", standalone_loader)
         self.assertIn("(${expression})", standalone_loader)
 
-        self.assertIn("evaluate({ useCache: false, restart: true })", app)
+        self.assertIn("triggerEvaluation({ useCache: false, restart: true })", app)
         self.assertIn("abortActiveEvaluation", app)
         self.assertIn("setEvaluationPhase", app)
         self.assertIn("formatLocalDebugTime", app)
@@ -193,6 +202,10 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("markEvaluatorReady", app)
         self.assertIn('elements.status.textContent === "Loading evaluator"', app)
         self.assertIn('classList.toggle("no-matches"', app)
+        self.assertIn("recycleWorker", standalone_loader)
+        self.assertIn(
+            "recycling browser evaluator worker after remote flake evaluation", standalone_loader
+        )
 
         matrix = Path("tools/evaluation_matrix.py").read_text()
         for repository in [
