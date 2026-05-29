@@ -75,9 +75,17 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("show-trace = true", loader)
         self.assertIn("substituters =", loader)
         self.assertIn("clearNixFetchCache", loader)
+        self.assertIn("prepareRemoteFlakeEvaluationState", loader)
+        self.assertIn("clearStaleFetchState", loader)
+        self.assertIn("missingFlakeSourcePaths", loader)
+        self.assertIn("removePath", loader)
+        self.assertIn("clearing browser Nix cache and state before remote flake evaluation", loader)
+        self.assertIn("/persist/nix-root/nix/var/nix", loader)
+        self.assertIn("/persist/state/nix/var/nix", loader)
         self.assertIn("shouldRetryAfterClearingFetchCache", loader)
         self.assertIn("NAR hash mismatch", loader)
         self.assertIn("source\\/flake\\.nix", loader)
+        self.assertIn("/persist/nix-root/nix/store/", loader)
         self.assertIn('appendWorkerDebugLog("libeval-wasm:error", response.error)', loader)
         self.assertIn('appendLocalDebugLog("libeval-wasm:error", response.error)', loader)
         self.assertIn("showDiagnostics([payload.error, ...attempts])", app)
@@ -183,6 +191,16 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("markEvaluatorReady", app)
         self.assertIn('elements.status.textContent === "Loading evaluator"', app)
         self.assertIn('classList.toggle("no-matches"', app)
+
+        matrix = Path("tools/evaluation_matrix.py").read_text()
+        for repository in [
+            "github:johnrichardrinehart/johnos",
+            "github:anduril/jetpack-nixos",
+            "github:jmbaur/homelab",
+        ]:
+            self.assertIn(repository, matrix)
+        self.assertIn("backend_matrix", matrix)
+        self.assertIn("standalone_matrix", matrix)
         self.assertIn("No options match", app)
 
     def test_standalone_evaluator_load_survives_storage_denial(self):

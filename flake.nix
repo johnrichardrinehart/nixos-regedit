@@ -95,6 +95,7 @@
           ./src/libeval-wasm.cc
           ./tests
           ./tools/build_standalone.py
+          ./tools/evaluation_matrix.py
         ];
       };
       nixpkgsLibSource =

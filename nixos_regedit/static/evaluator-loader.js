@@ -381,10 +381,63 @@ in {
     }
   }
 
+  function removePath(module, path) {
+    if (!module.FS || !path) return;
+    let stat;
+    try {
+      stat = module.FS.stat(path);
+    } catch (_) {
+      return;
+    }
+    if (module.FS.isDir(stat.mode)) {
+      removeTree(module, path);
+      module.FS.rmdir(path);
+    } else {
+      module.FS.unlink(path);
+    }
+  }
+
   async function clearNixFetchCache(module) {
     removeTree(module, "/persist/cache/nix");
     mkdirTree(module, "/persist/cache/nix");
     await syncfs(module, false);
+  }
+
+  async function prepareRemoteFlakeEvaluationState(module) {
+    [
+      "/persist/cache/nix",
+      "/persist/nix-root/nix/store",
+      "/persist/nix-root/nix/var/nix",
+      "/persist/state/nix/var/nix",
+    ].forEach((path) => removeTree(module, path));
+    [
+      "/persist/cache/nix",
+      "/persist/nix-root/nix/store",
+      "/persist/nix-root/nix/var/nix",
+      "/persist/state/nix/var/nix",
+      "/persist/state/nix/var/log",
+      "/persist/state/nix/var/log/nix",
+    ].forEach((path) => mkdirTree(module, path));
+    await syncfs(module, false);
+  }
+
+  function missingFlakeSourcePaths(response) {
+    const message = String((response && response.error) || "");
+    const paths = new Set();
+    const pattern = /path '(\/nix\/store\/[^']+-source)\/flake\.nix' does not exist/gi;
+    let match;
+    while ((match = pattern.exec(message)) !== null) {
+      paths.add(match[1]);
+      paths.add(match[1].replace(/^\/nix\/store\//, "/persist/nix-root/nix/store/"));
+    }
+    return [...paths];
+  }
+
+  async function clearStaleFetchState(module, response) {
+    for (const path of missingFlakeSourcePaths(response)) {
+      removePath(module, path);
+    }
+    await clearNixFetchCache(module);
   }
 
   function shouldRetryAfterClearingFetchCache(response) {
@@ -532,7 +585,11 @@ ${browserModuleExpression.toString()}
 ${mkdirTree.toString()}
 ${syncfs.toString()}
 ${removeTree.toString()}
+${removePath.toString()}
 ${clearNixFetchCache.toString()}
+${prepareRemoteFlakeEvaluationState.toString()}
+${missingFlakeSourcePaths.toString()}
+${clearStaleFetchState.toString()}
 ${shouldRetryAfterClearingFetchCache.toString()}
 ${appendDebugLog.toString()}
 ${attachDebugLog.toString()}
@@ -609,7 +666,7 @@ async function evalNixRetryingFetchCacheMismatch(expression) {
     return response;
   }
   const module = await moduleInstance();
-  await clearNixFetchCache(module);
+  await clearStaleFetchState(module, response);
   const retried = await evalNix(expression);
   if (retried && retried.ok === false) return retried;
   return {
@@ -644,7 +701,6 @@ async function evaluate(request) {
   currentDebugLog = [];
   appendWorkerDebugLog("worker", "starting evaluation request");
   emitPhase("Evaluating");
-  const system = request.system || await currentSystem();
   self.LibevalWasmFetchConfig = {
     ...(request.fetchProxy || {}),
     allowFetch: Boolean(request.allowFetch),
@@ -657,7 +713,14 @@ async function evaluate(request) {
       currentDebugLog,
     );
   }
-  if (isFlakeRef && request.allowFetch) emitPhase("Fetching");
+  if (isFlakeRef && request.allowFetch) {
+    emitPhase("Fetching");
+    if (isRemoteFlakeRef(input)) {
+      appendWorkerDebugLog("worker", "clearing browser Nix cache and state before remote flake evaluation");
+      await prepareRemoteFlakeEvaluationState(await moduleInstance());
+    }
+  }
+  const system = request.system || await currentSystem();
   const rawResponse = isFlakeRef ? null : await evalNixRetryingFetchCacheMismatch(request.expression);
   if (rawResponse && looksLikePayload(rawResponse)) return attachDebugLog(rawResponse, currentDebugLog);
   const wrappedResponse = await evalNixRetryingFetchCacheMismatch(
@@ -855,7 +918,7 @@ self.addEventListener("message", async (event) => {
       if (!response || response.ok !== false || !shouldRetryAfterClearingFetchCache(response)) {
         return response;
       }
-      await clearNixFetchCache(module);
+      await clearStaleFetchState(module, response);
       const retried = await evalNix(expression);
       if (retried && retried.ok === false) return retried;
       return {
@@ -892,7 +955,6 @@ self.addEventListener("message", async (event) => {
         try {
           appendLocalDebugLog("loader", "starting evaluation request");
           emitLocalPhase("Evaluating");
-          const system = serializableRequest.system || currentSystemRaw();
           window.LibevalWasmFetchConfig = {
             ...(serializableRequest.fetchProxy || {}),
             allowFetch: Boolean(serializableRequest.allowFetch),
@@ -905,7 +967,17 @@ self.addEventListener("message", async (event) => {
               currentDebugLog,
             );
           }
-          if (isFlakeRef && serializableRequest.allowFetch) emitLocalPhase("Fetching");
+          if (isFlakeRef && serializableRequest.allowFetch) {
+            emitLocalPhase("Fetching");
+            if (isRemoteFlakeRef(input)) {
+              appendLocalDebugLog(
+                "loader",
+                "clearing browser Nix cache and state before remote flake evaluation",
+              );
+              await prepareRemoteFlakeEvaluationState(module);
+            }
+          }
+          const system = serializableRequest.system || currentSystemRaw();
           const rawResponse = isFlakeRef
             ? null
             : await evalNixRetryingFetchCacheMismatch(serializableRequest.expression);
