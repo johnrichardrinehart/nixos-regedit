@@ -121,9 +121,11 @@ pkgs.stdenvNoCC.mkDerivation {
       -sEXPORT_NAME=createLibevalWasm \
       -sSINGLE_FILE=1 \
       -sFORCE_FILESYSTEM=1 \
+      -sINITIAL_MEMORY=268435456 \
+      -sMAXIMUM_MEMORY=1073741824 \
       -sALLOW_MEMORY_GROWTH=1 \
-      -sSTACK_SIZE=8388608 \
-      -sASSERTIONS=2 \
+      -sSTACK_SIZE=134217728 \
+      -sASSERTIONS=0 \
       -sDISABLE_EXCEPTION_CATCHING=0 \
       -sERROR_ON_UNDEFINED_SYMBOLS=1 \
       -sEXPORTED_FUNCTIONS='["_libeval_wasm","_libeval_wasm_current_system","_malloc","_free"]' \

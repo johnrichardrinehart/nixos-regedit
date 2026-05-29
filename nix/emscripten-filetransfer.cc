@@ -183,15 +183,23 @@ EM_JS(int, libeval_wasm_fetch,
               xhr.overrideMimeType("text/plain; charset=x-user-defined");
               xhr.send(null);
 
+              const responseHeader = name => {
+                  try {
+                      return xhr.getResponseHeader(name) || "";
+                  } catch (_) {
+                      return "";
+                  }
+              };
               const response = xhr.responseText || "";
               const size = response.length;
               const dataPtr = size > 0 ? _malloc(size) : 0;
               for (let i = 0; i < size; i += 1)
                   HEAPU8[dataPtr + i] = response.charCodeAt(i) & 0xff;
 
-              const finalUrlPtr = newUtf8(xhr.getResponseHeader("X-Upstream-URL") ||
+              const finalUrlPtr = newUtf8(
+                  (shouldProxy ? responseHeader("X-Upstream-URL") : "") ||
                   xhr.responseURL || url);
-              const etagPtr = newUtf8(xhr.getResponseHeader("ETag") || "");
+              const etagPtr = newUtf8(responseHeader("ETag"));
               HEAPU32[outData >> 2] = dataPtr;
               HEAPU32[outSize >> 2] = size;
               HEAPU32[outUrl >> 2] = finalUrlPtr;

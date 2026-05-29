@@ -89,6 +89,8 @@
           ./.github/workflows/pages.yml
           ./infra/cloudflare/workers/archive-proxy.js
           ./lib
+          ./nix/emscripten-filetransfer.cc
+          ./nix/libeval-wasm.nix
           ./nixos_regedit
           ./src/libeval-wasm.cc
           ./tests

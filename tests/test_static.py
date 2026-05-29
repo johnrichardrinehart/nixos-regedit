@@ -127,6 +127,7 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("X-Upstream-Authorization", worker)
         self.assertIn("X-Upstream-URL", worker)
         self.assertIn("X-NixOS-Regedit-Proxy-Cache", worker)
+        self.assertIn("Access-Control-Expose-Headers", worker)
         self.assertIn("headFromCached", worker)
         self.assertIn("cacheableRequest", worker)
         self.assertIn('!request.headers.has("Range")', worker)
@@ -179,6 +180,19 @@ class StaticBundleTests(unittest.TestCase):
         self.assertNotIn(
             'if (!message.includes("Mount point is already in use")) throw error', loader
         )
+
+    def test_libeval_wasm_uses_browser_tolerant_memory_settings(self):
+        recipe = Path("nix/libeval-wasm.nix").read_text()
+        transfer = Path("nix/emscripten-filetransfer.cc").read_text()
+
+        self.assertIn("-sINITIAL_MEMORY=268435456", recipe)
+        self.assertIn("-sMAXIMUM_MEMORY=1073741824", recipe)
+        self.assertIn("-sALLOW_MEMORY_GROWTH=1", recipe)
+        self.assertIn("-sSTACK_SIZE=134217728", recipe)
+        self.assertIn("-sASSERTIONS=0", recipe)
+        self.assertNotIn("-sASSERTIONS=2", recipe)
+        self.assertIn("const responseHeader = name =>", transfer)
+        self.assertIn('(shouldProxy ? responseHeader("X-Upstream-URL") : "")', transfer)
 
     def test_standalone_falls_back_when_worker_bootstrap_fails(self):
         loader = Path("nixos_regedit/static/evaluator-loader.js").read_text()
