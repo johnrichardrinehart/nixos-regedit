@@ -458,6 +458,10 @@ async function forceEvaluatorMemoryClean() {
     await evaluator.resetMemory();
     return true;
   }
+  if (typeof evaluator.collectMemory === "function") {
+    await evaluator.collectMemory();
+    return true;
+  }
   if (typeof evaluator.cancel === "function") {
     evaluator.cancel();
     return true;

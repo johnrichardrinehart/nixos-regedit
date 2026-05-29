@@ -202,7 +202,11 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("markEvaluatorReady", app)
         self.assertIn('elements.status.textContent === "Loading evaluator"', app)
         self.assertIn('classList.toggle("no-matches"', app)
+        self.assertIn("collectMemory", app)
         self.assertIn("recycleWorker", standalone_loader)
+        self.assertIn("releaseResultRaw", standalone_loader)
+        self.assertIn("libeval_wasm_collect", standalone_loader)
+        self.assertIn("bytes after result release", standalone_loader)
         self.assertIn(
             "recycling browser evaluator worker after remote flake evaluation", standalone_loader
         )
@@ -231,6 +235,7 @@ class StaticBundleTests(unittest.TestCase):
 
     def test_libeval_wasm_uses_browser_tolerant_memory_settings(self):
         recipe = Path("nix/libeval-wasm.nix").read_text()
+        source = Path("src/libeval-wasm.cc").read_text()
         transfer = Path("nix/emscripten-filetransfer.cc").read_text()
 
         self.assertIn("nixEmscriptenComponents.libs.nix-util.dev", recipe)
@@ -241,7 +246,15 @@ class StaticBundleTests(unittest.TestCase):
         self.assertIn("-sALLOW_MEMORY_GROWTH=1", recipe)
         self.assertIn("-sSTACK_SIZE=134217728", recipe)
         self.assertIn("-sASSERTIONS=0", recipe)
+        self.assertIn("_libeval_wasm_release_result", recipe)
+        self.assertIn("_libeval_wasm_collect", recipe)
+        self.assertIn("_libeval_wasm_heap_size", recipe)
         self.assertNotIn("-sASSERTIONS=2", recipe)
+        self.assertIn("libeval_wasm_release_result", source)
+        self.assertIn("std::string().swap(lastResult)", source)
+        self.assertIn("maybeCollectJsGarbage", source)
+        self.assertIn('typeof globalThis.gc === "function"', source)
+        self.assertIn("emscripten_get_heap_size", source)
         self.assertIn("const responseHeader = name =>", transfer)
         self.assertIn('(shouldProxy ? responseHeader("X-Upstream-URL") : "")', transfer)
 

@@ -6,6 +6,7 @@
 #include <nix_api_value.h>
 
 #include <emscripten/emscripten.h>
+#include <emscripten/heap.h>
 
 #include <array>
 #include <cstdint>
@@ -26,6 +27,22 @@ struct Sha256State {
 };
 
 std::unordered_map<void *, Sha256State> sha256States;
+std::string lastResult;
+
+// clang-format off
+EM_JS(int, maybeCollectJsGarbage, (), {
+    if (typeof globalThis.gc === "function") {
+        globalThis.gc();
+        return 1;
+    }
+    return 0;
+});
+// clang-format on
+
+int collectRuntime() {
+    sha256States.clear();
+    return maybeCollectJsGarbage();
+}
 
 uint32_t rotr(uint32_t value, unsigned int bits) {
     return (value >> bits) | (value << (32 - bits));
@@ -563,15 +580,30 @@ extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
 const char *libeval_wasm(const char *expression) {
-    static std::string result;
     try {
-        result = evaluateToJson(expression ? expression : "");
+        lastResult = evaluateToJson(expression ? expression : "");
     } catch (const std::exception &e) {
-        result = failure(std::string("uncaught evaluator exception: ") + e.what());
+        lastResult = failure(std::string("uncaught evaluator exception: ") + e.what());
     } catch (...) {
-        result = failure("uncaught evaluator exception");
+        lastResult = failure("uncaught evaluator exception");
     }
-    return result.c_str();
+    return lastResult.c_str();
+}
+
+EMSCRIPTEN_KEEPALIVE
+void libeval_wasm_release_result() {
+    std::string().swap(lastResult);
+    collectRuntime();
+}
+
+EMSCRIPTEN_KEEPALIVE
+int libeval_wasm_collect() {
+    return collectRuntime();
+}
+
+EMSCRIPTEN_KEEPALIVE
+size_t libeval_wasm_heap_size() {
+    return emscripten_get_heap_size();
 }
 
 EMSCRIPTEN_KEEPALIVE

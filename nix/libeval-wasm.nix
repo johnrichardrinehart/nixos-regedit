@@ -131,7 +131,7 @@ pkgs.stdenvNoCC.mkDerivation {
       -sASSERTIONS=0 \
       -sDISABLE_EXCEPTION_CATCHING=0 \
       -sERROR_ON_UNDEFINED_SYMBOLS=1 \
-      -sEXPORTED_FUNCTIONS='["_libeval_wasm","_libeval_wasm_current_system","_malloc","_free"]' \
+      -sEXPORTED_FUNCTIONS='["_libeval_wasm","_libeval_wasm_release_result","_libeval_wasm_collect","_libeval_wasm_heap_size","_libeval_wasm_current_system","_malloc","_free"]' \
       -sEXPORTED_RUNTIME_METHODS='["cwrap","UTF8ToString","getExceptionMessage","FS","IDBFS","ENV"]' \
       -lidbfs.js \
       -o libeval.js

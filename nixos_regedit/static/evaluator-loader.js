@@ -623,6 +623,9 @@ ${preparePersistentStorage.toString()}
 
 let modulePromise = null;
 let evaluateRaw = null;
+let releaseResultRaw = null;
+let collectRaw = null;
+let heapSizeRaw = null;
 let currentSystemRaw = null;
 let storage = null;
 let currentDebugLog = [];
@@ -657,6 +660,9 @@ async function moduleInstance() {
       });
       storage = await preparePersistentStorage(module);
       evaluateRaw = module.cwrap("libeval_wasm", "string", ["string"]);
+      releaseResultRaw = module.cwrap("libeval_wasm_release_result", null, []);
+      collectRaw = module.cwrap("libeval_wasm_collect", "number", []);
+      heapSizeRaw = module.cwrap("libeval_wasm_heap_size", "number", []);
       currentSystemRaw = module.cwrap("libeval_wasm_current_system", "string", []);
       appendWorkerDebugLog(
         "worker",
@@ -675,15 +681,34 @@ async function evalNix(expression) {
   const module = await moduleInstance();
   emitPhase("Evaluating");
   appendWorkerDebugLog("libeval-wasm", "evaluating expression");
-  const response = JSON.parse(evaluateRaw(expression));
+  const beforeHeapSize = typeof heapSizeRaw === "function" ? heapSizeRaw() : 0;
+  let response;
+  try {
+    response = JSON.parse(evaluateRaw(expression));
+  } finally {
+    if (typeof releaseResultRaw === "function") releaseResultRaw();
+  }
+  const afterHeapSize = typeof heapSizeRaw === "function" ? heapSizeRaw() : 0;
   if (response && response.ok === false) {
     appendWorkerDebugLog("libeval-wasm", "evaluation returned failure");
     if (response.error) appendWorkerDebugLog("libeval-wasm:error", response.error);
   } else {
     appendWorkerDebugLog("libeval-wasm", "evaluation returned result");
   }
+  if (beforeHeapSize || afterHeapSize) {
+    appendWorkerDebugLog(
+      "libeval-wasm",
+      "heap size " + beforeHeapSize + " -> " + afterHeapSize + " bytes after result release",
+    );
+  }
   await syncfs(module, false);
   return response;
+}
+
+async function collectMemory() {
+  await moduleInstance();
+  if (typeof releaseResultRaw === "function") releaseResultRaw();
+  if (typeof collectRaw === "function") collectRaw();
 }
 
 async function evalNixRetryingFetchCacheMismatch(expression) {
@@ -783,6 +808,9 @@ self.addEventListener("message", async (event) => {
       } finally {
         currentDebugRequestId = null;
       }
+    } else if (method === "collectMemory") {
+      await collectMemory();
+      value = { ok: true };
     } else {
       throw new Error("Unknown evaluator worker method: " + method);
     }
@@ -886,6 +914,11 @@ self.addEventListener("message", async (event) => {
           return await call("evaluate", serializableRequest, onDebugLog, onPhase);
         } finally {
           if (recycleAfter && worker) {
+            try {
+              await call("collectMemory");
+            } catch (_) {
+              // Worker recycle below is the hard memory boundary.
+            }
             if (typeof onDebugLog === "function") {
               onDebugLog({
                 time: new Date().toISOString(),
@@ -897,7 +930,16 @@ self.addEventListener("message", async (event) => {
           }
         }
       },
+      collectMemory: async () => {
+        await ready;
+        return call("collectMemory");
+      },
       resetMemory: async () => {
+        try {
+          await api.collectMemory();
+        } catch (_) {
+          // Recycling the worker is the fallback cleanup path.
+        }
         await recycleWorker("Evaluator memory reset.");
       },
       cancel: () => {
@@ -944,6 +986,9 @@ self.addEventListener("message", async (event) => {
     });
     const storage = await preparePersistentStorage(module);
     const evaluateRaw = module.cwrap("libeval_wasm", "string", ["string"]);
+    const releaseResultRaw = module.cwrap("libeval_wasm_release_result", null, []);
+    const collectRaw = module.cwrap("libeval_wasm_collect", "number", []);
+    const heapSizeRaw = module.cwrap("libeval_wasm_heap_size", "number", []);
     const currentSystemRaw = module.cwrap("libeval_wasm_current_system", "string", []);
     appendLocalDebugLog(
       "loader",
@@ -954,12 +999,25 @@ self.addEventListener("message", async (event) => {
     );
     const evalNix = async (expression) => {
       appendLocalDebugLog("libeval-wasm", "evaluating expression");
-      const response = JSON.parse(evaluateRaw(expression));
+      const beforeHeapSize = typeof heapSizeRaw === "function" ? heapSizeRaw() : 0;
+      let response;
+      try {
+        response = JSON.parse(evaluateRaw(expression));
+      } finally {
+        releaseResultRaw();
+      }
+      const afterHeapSize = typeof heapSizeRaw === "function" ? heapSizeRaw() : 0;
       if (response && response.ok === false) {
         appendLocalDebugLog("libeval-wasm", "evaluation returned failure");
         if (response.error) appendLocalDebugLog("libeval-wasm:error", response.error);
       } else {
         appendLocalDebugLog("libeval-wasm", "evaluation returned result");
+      }
+      if (beforeHeapSize || afterHeapSize) {
+        appendLocalDebugLog(
+          "libeval-wasm",
+          "heap size " + beforeHeapSize + " -> " + afterHeapSize + " bytes after result release",
+        );
       }
       await syncfs(module, false);
       return response;
@@ -1060,8 +1118,13 @@ self.addEventListener("message", async (event) => {
           currentDebugPhase = null;
         }
       },
+      collectMemory: async () => {
+        releaseResultRaw();
+        collectRaw();
+      },
       cancel: () => {
         cancelled = true;
+        collectRaw();
       },
     };
     window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-ready"));
