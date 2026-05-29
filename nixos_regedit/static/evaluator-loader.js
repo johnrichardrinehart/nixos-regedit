@@ -20,6 +20,18 @@
     return { ok: false, error, attempts: [] };
   }
 
+  function errorMessage(error) {
+    if (typeof error === "string") return error;
+    if (error && typeof error.message === "string" && error.message) return error.message;
+    if (error && typeof error === "object") {
+      try {
+        const json = JSON.stringify(error);
+        if (json && json !== "{}") return json;
+      } catch (_) {}
+    }
+    return String(error);
+  }
+
   function looksLikeFlakeRef(value) {
     const stripped = String(value || "").trim();
     if (!stripped || stripped.includes("\n")) return false;
@@ -333,7 +345,7 @@ in {
       try {
         module.FS.mkdir(current);
       } catch (error) {
-        if (!String(error && error.message).includes("File exists")) {
+        if (!errorMessage(error).includes("File exists")) {
           try {
             module.FS.stat(current);
           } catch (_) {
@@ -371,12 +383,21 @@ in {
     for (const entry of entries) {
       if (entry === "." || entry === "..") continue;
       const child = `${path}/${entry}`;
-      const stat = module.FS.stat(child);
+      let stat;
+      try {
+        stat = module.FS.stat(child);
+      } catch (_) {
+        continue;
+      }
       if (module.FS.isDir(stat.mode)) {
         removeTree(module, child);
-        module.FS.rmdir(child);
+        try {
+          module.FS.rmdir(child);
+        } catch (_) {}
       } else {
-        module.FS.unlink(child);
+        try {
+          module.FS.unlink(child);
+        } catch (_) {}
       }
     }
   }
@@ -391,9 +412,13 @@ in {
     }
     if (module.FS.isDir(stat.mode)) {
       removeTree(module, path);
-      module.FS.rmdir(path);
+      try {
+        module.FS.rmdir(path);
+      } catch (_) {}
     } else {
-      module.FS.unlink(path);
+      try {
+        module.FS.unlink(path);
+      } catch (_) {}
     }
   }
 
@@ -490,7 +515,7 @@ in {
         module.FS.mount(module.IDBFS, { autoPersist: false }, "/persist");
         module.__nixosRegeditPersistentMounted = true;
       } catch (error) {
-        const message = String(error && error.message ? error.message : error);
+        const message = errorMessage(error);
         if (!message.includes("Mount point is already in use")) {
           storage.reason = `Persistent browser storage unavailable: ${message}`;
         } else {
@@ -505,7 +530,7 @@ in {
         storage.enabled = true;
         storage.backend = "IDBFS";
       } catch (error) {
-        const message = String(error && error.message ? error.message : error);
+        const message = errorMessage(error);
         storage.reason = `Persistent browser storage unavailable: ${message}`;
         module.__nixosRegeditPersistentMounted = false;
       }
@@ -561,7 +586,7 @@ in {
     try {
       await syncfs(module, false);
     } catch (error) {
-      const message = String(error && error.message ? error.message : error);
+      const message = errorMessage(error);
       storage.enabled = false;
       storage.backend = "MEMFS";
       storage.reason = `Persistent browser storage unavailable: ${message}`;
@@ -576,6 +601,7 @@ const FLAKE_REF_RE = ${FLAKE_REF_RE.toString()};
 ${nixString.toString()}
 ${looksLikePayload.toString()}
 ${failure.toString()}
+${errorMessage.toString()}
 ${looksLikeFlakeRef.toString()}
 ${splitFlakeSelector.toString()}
 ${isRemoteFlakeRef.toString()}
@@ -765,7 +791,7 @@ self.addEventListener("message", async (event) => {
     self.postMessage({
       id,
       ok: false,
-      error: error && error.message ? error.message : String(error),
+      error: errorMessage(error),
     });
   }
 });
@@ -807,7 +833,7 @@ self.addEventListener("message", async (event) => {
     };
 
     const failPending = (error) => {
-      const detail = error && error.message ? error.message : String(error || "cancelled");
+      const detail = error ? errorMessage(error) : "cancelled";
       for (const deferred of pending.values()) deferred.reject(new Error(detail));
       pending.clear();
     };
@@ -863,8 +889,7 @@ self.addEventListener("message", async (event) => {
         const loaded = await loadWorkerEvaluator(window.NixOSRegeditStandaloneEvaluatorSource);
         if (loaded) return true;
       } catch (error) {
-        window.NixOSRegeditEvaluatorLoadError =
-          error && error.message ? error.message : String(error);
+        window.NixOSRegeditEvaluatorLoadError = errorMessage(error);
       }
       if (typeof window.createLibevalWasm !== "function") {
         (0, eval)(window.NixOSRegeditStandaloneEvaluatorSource);
@@ -1019,7 +1044,7 @@ self.addEventListener("message", async (event) => {
 
   window.NixOSRegeditLoadEvaluator = loadEvaluator;
   loadEvaluator().catch((error) => {
-    const detail = error && error.message ? error.message : error;
+    const detail = errorMessage(error);
     window.dispatchEvent(new CustomEvent("nixos-regedit-evaluator-failed", { detail }));
   });
 })();

@@ -620,7 +620,21 @@ function resetResults() {
 }
 
 function requestFailureMessage(error) {
-  const detail = error && error.message ? error.message : String(error);
+  let detail;
+  if (typeof error === "string") {
+    detail = error;
+  } else if (error && typeof error.message === "string" && error.message) {
+    detail = error.message;
+  } else if (error && typeof error === "object") {
+    try {
+      const json = JSON.stringify(error);
+      detail = json && json !== "{}" ? json : Object.prototype.toString.call(error);
+    } catch (_) {
+      detail = Object.prototype.toString.call(error);
+    }
+  } else {
+    detail = String(error);
+  }
   return ["Evaluation failed.", detail].filter(Boolean).join("\n\n");
 }
 
