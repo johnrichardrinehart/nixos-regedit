@@ -107,17 +107,21 @@ let
   hasFlake = flake != null;
   concatStringsSep = sep: list:
     builtins.concatStringsSep sep (map builtins.toString list);
-  sanitize = value:
+  sanitizeN = depth: value:
     if builtins.isFunction value then "<function>"
     else if builtins.isPath value then builtins.toString value
-    else if builtins.isList value then map sanitize value
+    else if builtins.isList value then
+      if depth <= 0 then "<list>"
+      else map (sanitizeN (depth - 1)) value
     else if builtins.isAttrs value then
       if (value.type or null) == "derivation" then value.name or "<derivation>"
       else if value ? outPath then
         let coerced = builtins.tryEval (builtins.toString value);
         in if coerced.success then coerced.value else value.name or "<path>"
-      else builtins.mapAttrs (_: sanitize) value
+      else if depth <= 0 then "<attrs>"
+      else builtins.mapAttrs (_: sanitizeN (depth - 1)) value
     else value;
+  sanitize = sanitizeN 4;
   typeName = type:
     if builtins.isString type then type
     else if builtins.isAttrs type && type ? description then type.description
@@ -252,6 +256,20 @@ let
       let attempted = builtins.tryEval option.\${name};
       in if attempted.success then safeSanitize attempted.value else "<unevaluated>"
     else fallback;
+  tryRawField = option: name: fallback:
+    if option ? \${name} then
+      let attempted = builtins.tryEval option.\${name};
+      in if attempted.success then attempted.value else fallback
+    else fallback;
+  docToString = value:
+    let attempted = builtins.tryEval (
+      if builtins.isString value then value
+      else if builtins.isPath value then builtins.toString value
+      else if builtins.isAttrs value && value ? text then builtins.toString value.text
+      else if builtins.isAttrs value && value ? description && builtins.isString value.description then value.description
+      else builtins.toJSON (sanitizeN 2 value)
+    );
+    in if attempted.success then attempted.value else "<unevaluated>";
   relatedPackageName = package:
     if builtins.isString package then package
     else if builtins.isList package then concatStringsSep "." package
@@ -278,11 +296,11 @@ let
   optionPayload = loc: option: {
     declarations = tryField option "declarations" [ "browser-expression" ];
     default = tryField option "defaultText" null;
-    description = builtins.toString (tryField option "description" "");
+    description = docToString (tryRawField option "description" "");
     example = tryField option "exampleText" null;
     loc = loc;
     readOnly = tryField option "readOnly" false;
-    relatedPackages = relatedPackagesDoc (tryField option "relatedPackages" []);
+    relatedPackages = relatedPackagesDoc (tryRawField option "relatedPackages" []);
     type =
       let attempted = builtins.tryEval (option.type or lib.types.anything);
       in if attempted.success then typeName attempted.value else "<unevaluated>";
