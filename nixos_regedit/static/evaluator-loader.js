@@ -371,7 +371,10 @@ in {
 
   function shouldRetryAfterClearingFetchCache(response) {
     const message = String((response && response.error) || "");
-    return /NAR hash mismatch|got 'sha256-[^']+'|expected 'sha256-[^']+'/i.test(message);
+    return (
+      /NAR hash mismatch|got 'sha256-[^']+'|expected 'sha256-[^']+'/i.test(message) ||
+      /path '\/nix\/store\/[^']+-source\/flake\.nix' does not exist/i.test(message)
+    );
   }
 
   function appendDebugLog(debugLog, source, message) {
@@ -474,7 +477,12 @@ in {
       module.ENV.NIX_STATE_HOME = "/persist/state/nix";
       module.ENV.NIX_STATE_DIR = "/persist/state/nix/var/nix";
       module.ENV.NIX_LOG_DIR = "/persist/state/nix/var/log/nix";
-      module.ENV.NIX_CONFIG = [module.ENV.NIX_CONFIG, "tarball-ttl = 900", "substituters ="]
+      module.ENV.NIX_CONFIG = [
+        module.ENV.NIX_CONFIG,
+        "tarball-ttl = 900",
+        "show-trace = true",
+        "substituters =",
+      ]
         .filter(Boolean)
         .join("\n");
     }
@@ -567,10 +575,12 @@ async function evalNix(expression) {
   emitPhase("Evaluating");
   appendWorkerDebugLog("libeval-wasm", "evaluating expression");
   const response = JSON.parse(evaluateRaw(expression));
-  appendWorkerDebugLog(
-    "libeval-wasm",
-    response && response.ok === false ? "evaluation returned failure" : "evaluation returned result",
-  );
+  if (response && response.ok === false) {
+    appendWorkerDebugLog("libeval-wasm", "evaluation returned failure");
+    if (response.error) appendWorkerDebugLog("libeval-wasm:error", response.error);
+  } else {
+    appendWorkerDebugLog("libeval-wasm", "evaluation returned result");
+  }
   await syncfs(module, false);
   return response;
 }
@@ -587,7 +597,7 @@ async function evalNixRetryingFetchCacheMismatch(expression) {
   return {
     ...retried,
     diagnostics: [
-      "Cleared stale browser Nix fetch cache after a NAR hash mismatch, then retried successfully.",
+      "Cleared stale browser Nix fetch cache after a cached source mismatch, then retried successfully.",
       ...((retried && retried.diagnostics) || []),
     ],
   };
@@ -813,12 +823,12 @@ self.addEventListener("message", async (event) => {
     const evalNix = async (expression) => {
       appendLocalDebugLog("libeval-wasm", "evaluating expression");
       const response = JSON.parse(evaluateRaw(expression));
-      appendLocalDebugLog(
-        "libeval-wasm",
-        response && response.ok === false
-          ? "evaluation returned failure"
-          : "evaluation returned result",
-      );
+      if (response && response.ok === false) {
+        appendLocalDebugLog("libeval-wasm", "evaluation returned failure");
+        if (response.error) appendLocalDebugLog("libeval-wasm:error", response.error);
+      } else {
+        appendLocalDebugLog("libeval-wasm", "evaluation returned result");
+      }
       await syncfs(module, false);
       return response;
     };
@@ -833,7 +843,7 @@ self.addEventListener("message", async (event) => {
       return {
         ...retried,
         diagnostics: [
-          "Cleared stale browser Nix fetch cache after a NAR hash mismatch, then retried successfully.",
+          "Cleared stale browser Nix fetch cache after a cached source mismatch, then retried successfully.",
           ...((retried && retried.diagnostics) || []),
         ],
       };

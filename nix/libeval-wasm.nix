@@ -7,11 +7,14 @@
 
 let
   nixEmscriptenCIncludes = [
+    nixEmscriptenComponents.libs.nix-util.dev
     nixEmscriptenComponents.libs.nix-util-c.dev
     nixEmscriptenComponents.libs.nix-store-c.dev
     nixEmscriptenComponents.libs.nix-fetchers-c.dev
     nixEmscriptenComponents.libs.nix-expr-c.dev
     nixEmscriptenComponents.libs.nix-flake-c.dev
+    nixEmscriptenComponents.emscriptenDeps.boost.dev
+    pkgs.nlohmann_json
   ];
 
   emscriptenSqlite = pkgs.stdenvNoCC.mkDerivation {

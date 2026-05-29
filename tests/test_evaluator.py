@@ -38,8 +38,12 @@ class EvaluatorUnitTests(unittest.TestCase):
         self.assertIn("--offline", build_command("1", allow_fetch=False))
         self.assertNotIn("--offline", build_command("1", allow_fetch=True))
         self.assertIn("--debug", build_command("1", allow_fetch=False))
+        self.assertIn("--show-trace", build_command("1", allow_fetch=False))
         self.assertIn(
             "--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=False)
+        )
+        self.assertIn(
+            "--show-trace", build_flake_metadata_command("github:owner/repo", allow_fetch=False)
         )
         self.assertNotIn(
             "--offline", build_flake_metadata_command("github:owner/repo", allow_fetch=True)

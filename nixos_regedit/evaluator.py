@@ -95,6 +95,7 @@ def build_command(nix_expr: str, allow_fetch: bool) -> list[str]:
         "nix-command flakes",
         "eval",
         "--debug",
+        "--show-trace",
         "--json",
         "--impure",
     ]
@@ -219,6 +220,7 @@ def build_flake_metadata_command(ref: str, allow_fetch: bool) -> list[str]:
         "nix",
         "--extra-experimental-features",
         "nix-command flakes",
+        "--show-trace",
     ]
     if not allow_fetch:
         command.append("--offline")

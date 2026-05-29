@@ -1,3 +1,4 @@
+#include <nix/util/logging.hh>
 #include <nix_api_expr.h>
 #include <nix_api_flake.h>
 #include <nix_api_store.h>
@@ -429,6 +430,7 @@ std::string evaluateToJson(const std::string &expression) {
     // Source fetches still go through the Emscripten file-transfer shim.
     setenv("NIX_CONFIG",
            "tarball-ttl = 900\n"
+           "show-trace = true\n"
            "substitute = false\n"
            "substituters =\n"
            "trusted-public-keys =\n",
@@ -443,6 +445,9 @@ std::string evaluateToJson(const std::string &expression) {
         return failure(error);
     if (!ok(ctx.ptr, nix_set_verbosity(ctx.ptr, NIX_LVL_DEBUG), error, "enabling debug logging"))
         return failure(error);
+    if (!ok(ctx.ptr, nix_setting_set(ctx.ptr, "show-trace", "true"), error, "enabling Nix traces"))
+        return failure(error);
+    nix::loggerSettings.showTrace = true;
     if (!ok(ctx.ptr, nix_setting_set(ctx.ptr, "substitute", "false"), error,
             "disabling binary substitution"))
         return failure(error);
